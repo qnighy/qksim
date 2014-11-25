@@ -4,6 +4,22 @@
 #include <algorithm>
 #include "consts.h"
 #include "ils.h"
+#include "qkfpu.h"
+
+bool ils_use_native = false;
+
+static char regnames[32][5] = {
+  "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
+  "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
+  "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
+  "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"
+};
+static char fregnames[32][4] = {
+  "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7",
+  "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
+  "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23",
+  "f24", "f25", "f26", "f27", "f28", "f29", "f30", "f31"
+};
 
 static uint32_t ram[1<<20];
 static const int rs232c_recv_count = 2;
@@ -30,8 +46,10 @@ static void rs232c_prereceive() {
 
 static void ils_run() {
   int pc = 0;
-  uint32_t reg[32];
+  uint32_t reg[32], freg[32];
+  bool cc0 = false;
   std::fill(reg, reg+32, 0);
+  std::fill(freg, freg+32, 0);
   rs232c_prereceive();
   for(;;) {
     if(pc < 0 || pc >= (1<<20)) {
@@ -46,6 +64,10 @@ static void ils_run() {
     int rd = (pword>>11)&31;
     int sa = (pword>> 6)&31;
     int funct = pword&63;
+    int fmt = rs;
+    int ft = rt;
+    int fs = rd;
+    int fd = sa;
     uint32_t uimm16 = (uint16_t)pword;
     uint32_t simm16 = (int16_t)pword;
     int jt = (pc>>26<<26)|(pword&((1U<<26)-1));
@@ -53,6 +75,8 @@ static void ils_run() {
     int branch_target = -1;
     int set_reg = 0;
     uint32_t set_reg_val = 0;
+    int set_freg = -1;
+    uint32_t set_freg_val = 0;
     switch(opcode) {
       case OPCODE_SPECIAL:
         switch(funct) {
@@ -173,6 +197,136 @@ static void ils_run() {
         set_reg = rt;
         set_reg_val = (uint32_t)uimm16 << 16;
         break;
+      case OPCODE_COP1:
+        switch(fmt) {
+          case COP1_FMT_BRANCH:
+            if(ft == 0) {
+              branch_success = !cc0;
+              branch_target = pc+1+simm16;
+            } else if(ft == 1) {
+              branch_success = cc0;
+              branch_target = pc+1+simm16;
+            } else {
+              fprintf(stderr, "error: BC1x: unknown condition: %d\n", ft);
+              fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                  pc*4, pword);
+              exit(1);
+            }
+            break;
+          case COP1_FMT_MFC1:
+            set_reg = rt;
+            set_reg_val = freg[fs];
+            break;
+          case COP1_FMT_MTC1:
+            set_freg = fs;
+            set_freg_val = reg[rt];
+            break;
+          case COP1_FMT_S:
+            switch(funct) {
+              case COP1_FUNCT_ADD:
+                set_freg = fd;
+                if(ils_use_native) {
+                  set_freg_val = native_fadd(freg[fs], freg[ft]);
+                } else {
+                  set_freg_val = fadd(freg[fs], freg[ft]);
+                }
+                break;
+              case COP1_FUNCT_SUB:
+                set_freg = fd;
+                if(ils_use_native) {
+                  set_freg_val = native_fsub(freg[fs], freg[ft]);
+                } else {
+                  set_freg_val = fsub(freg[fs], freg[ft]);
+                }
+                break;
+              case COP1_FUNCT_MUL:
+                set_freg = fd;
+                if(ils_use_native) {
+                  set_freg_val = native_fmul(freg[fs], freg[ft]);
+                } else {
+                  set_freg_val = fmul(freg[fs], freg[ft]);
+                }
+                break;
+              case COP1_FUNCT_DIV:
+                set_freg = fd;
+                if(ils_use_native) {
+                  set_freg_val = native_fdiv(freg[fs], freg[ft]);
+                } else {
+                  set_freg_val = fdiv(freg[fs], freg[ft]);
+                }
+                break;
+              case COP1_FUNCT_SQRT:
+                set_freg = fd;
+                if(ils_use_native) {
+                  set_freg_val = native_fsqrt(freg[fs]);
+                } else {
+                  set_freg_val = fsqrt(freg[fs]);
+                }
+                break;
+              case COP1_FUNCT_MOV:
+                set_freg = fd;
+                set_freg_val = freg[fs];
+                break;
+              case COP1_FUNCT_CVT_W:
+                set_freg = fd;
+                if(ils_use_native) {
+                  set_freg_val = native_ftoi(freg[fs]);
+                } else {
+                  set_freg_val = ftoi(freg[fs]);
+                }
+                break;
+              case COP1_FUNCT_C_EQ:
+                if(ils_use_native) {
+                  cc0 = native_feq(freg[fs], freg[ft]);
+                } else {
+                  cc0 = feq(freg[fs], freg[ft]);
+                }
+                break;
+              case COP1_FUNCT_C_OLT:
+                if(ils_use_native) {
+                  cc0 = native_flt(freg[fs], freg[ft]);
+                } else {
+                  cc0 = flt(freg[fs], freg[ft]);
+                }
+                break;
+              case COP1_FUNCT_C_OLE:
+                if(ils_use_native) {
+                  cc0 = native_fle(freg[fs], freg[ft]);
+                } else {
+                  cc0 = fle(freg[fs], freg[ft]);
+                }
+                break;
+              default:
+                fprintf(stderr, "error: COP1.S: unknown funct: %d\n", funct);
+                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                    pc*4, pword);
+                exit(1);
+            }
+            break;
+          case COP1_FMT_W:
+            switch(funct) {
+              case COP1_FUNCT_CVT_S:
+                set_freg = fd;
+                if(ils_use_native) {
+                  set_freg_val = native_itof(freg[fs]);
+                } else {
+                  set_freg_val = itof(freg[fs]);
+                }
+                break;
+              default:
+                fprintf(stderr, "error: COP1.W: unknown funct: %d\n", funct);
+                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                    pc*4, pword);
+                exit(1);
+            }
+            break;
+          default:
+            fprintf(stderr, "error: COP1: unknown fmt: %d\n", fmt);
+            fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                pc*4, pword);
+            exit(1);
+        }
+        break;
       case OPCODE_LW: {
         set_reg = rt;
         uint32_t addr = reg[rs] + simm16;
@@ -242,6 +396,13 @@ static void ils_run() {
     }
     if(set_reg) {
       reg[set_reg] = set_reg_val;
+      // fprintf(stderr, "pc=0x%08x: $%s <- 0x%08x\n",
+      //     pc*4, regnames[set_reg], set_reg_val);
+    }
+    if(set_freg != -1) {
+      freg[set_freg] = set_freg_val;
+      // fprintf(stderr, "pc=0x%08x: $%s <- 0x%08x\n",
+      //     pc*4, fregnames[set_freg], set_freg_val);
     }
     if(branch_success) {
       pc = branch_target;

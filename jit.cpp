@@ -15,11 +15,19 @@
 #include "jit.h"
 using namespace std;
 
+bool jit_use_native = false;
+
 static string regnames[32] = {
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
   "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
   "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
   "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"
+};
+static string fregnames[32] = {
+  "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7",
+  "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
+  "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23",
+  "f24", "f25", "f26", "f27", "f28", "f29", "f30", "f31"
 };
 
 inline string use_regnames(int r) {
@@ -46,6 +54,7 @@ void jit_main() {
   prologue << "#include <stdio.h>" << endl;
   prologue << "#include <stdlib.h>" << endl;
   prologue << "#include <stdint.h>" << endl;
+  prologue << "#include \"qkfpu.h\"" << endl;
   prologue << "" << endl;
   prologue << "uint32_t ram[1<<20];" << endl;
   prologue << "" << endl;
@@ -83,6 +92,10 @@ void jit_main() {
   for(int i = 1; i < 32; ++i) {
     prologue << "  uint32_t " << regnames[i] << " = 0U;" << endl;
   }
+  for(int i = 0; i < 32; ++i) {
+    prologue << "  uint32_t " << fregnames[i] << " = 0U;" << endl;
+  }
+  prologue << "  int cc0 = 0;" << endl;
   epilogue << "  return 0;" << endl;
   epilogue << "}" << endl;
 
@@ -136,6 +149,10 @@ void jit_main() {
     int rd = (pword>>11)&31;
     int sa = (pword>> 6)&31;
     int funct = pword&63;
+    int fmt = rs;
+    int ft = rt;
+    int fs = rd;
+    int fd = sa;
     uint32_t uimm16 = (uint16_t)pword;
     uint32_t simm16 = (int16_t)pword;
     int jt = (pc>>26<<26)|(pword&((1U<<26)-1));
@@ -146,6 +163,9 @@ void jit_main() {
     int jump_target_reg = -1;
     int set_reg = 0;
     string set_reg_val;
+    int set_freg = -1;
+    string set_freg_val;
+    string set_cc0_val;
     switch(opcode) {
       case OPCODE_SPECIAL:
         switch(funct) {
@@ -274,6 +294,154 @@ void jit_main() {
         set_reg = rt;
         set_reg_val = hex_repr(uimm16<<16);
         break;
+      case OPCODE_COP1:
+        switch(fmt) {
+          case COP1_FMT_BRANCH:
+            if(ft == 0) {
+              branch_cond = "!cc0";
+              branch_target = pc+1+simm16;
+            } else if(ft == 1) {
+              branch_cond = "cc0";
+              branch_target = pc+1+simm16;
+            } else {
+              fprintf(stderr, "error: BC1x: unknown condition: %d\n", ft);
+              fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                  pc*4, pword);
+              exit(1);
+            }
+            break;
+          case COP1_FMT_MFC1:
+            set_reg = rt;
+            set_reg_val = fregnames[fs];
+            break;
+          case COP1_FMT_MTC1:
+            set_freg = fs;
+            set_freg_val = use_regnames(rt);
+            break;
+          case COP1_FMT_S:
+            switch(funct) {
+              case COP1_FUNCT_ADD:
+                set_freg = fd;
+                if(jit_use_native) {
+                  set_freg_val =
+                    "native_fadd(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                } else {
+                  set_freg_val =
+                    "fadd(" + fregnames[fs] + ", " + fregnames[ft] + ")";
+                }
+                break;
+              case COP1_FUNCT_SUB:
+                set_freg = fd;
+                if(jit_use_native) {
+                  set_freg_val =
+                    "native_fsub(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                } else {
+                  set_freg_val =
+                    "fsub(" + fregnames[fs] + ", " + fregnames[ft] + ")";
+                }
+                break;
+              case COP1_FUNCT_MUL:
+                set_freg = fd;
+                if(jit_use_native) {
+                  set_freg_val =
+                    "native_fmul(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                } else {
+                  set_freg_val =
+                    "fmul(" + fregnames[fs] + ", " + fregnames[ft] + ")";
+                }
+                break;
+              case COP1_FUNCT_DIV:
+                set_freg = fd;
+                if(jit_use_native) {
+                  set_freg_val =
+                    "native_fdiv(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                } else {
+                  set_freg_val =
+                    "fdiv(" + fregnames[fs] + ", " + fregnames[ft] + ")";
+                }
+                break;
+              case COP1_FUNCT_SQRT:
+                set_freg = fd;
+                if(jit_use_native) {
+                  set_freg_val = "native_fsqrt(" + fregnames[fs] + ")";
+                } else {
+                  set_freg_val = "fsqrt(" + fregnames[fs] + ")";
+                }
+                break;
+              case COP1_FUNCT_MOV:
+                set_freg = fd;
+                set_freg_val = fregnames[fs];
+                break;
+              case COP1_FUNCT_CVT_W:
+                set_freg = fd;
+                if(jit_use_native) {
+                  set_freg_val = "native_ftoi(" + fregnames[fs] + ")";
+                } else {
+                  set_freg_val = "ftoi(" + fregnames[fs] + ")";
+                }
+                break;
+              case COP1_FUNCT_C_EQ:
+                if(jit_use_native) {
+                  set_cc0_val = "native_feq(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                } else {
+                  set_cc0_val = "feq(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                }
+                break;
+              case COP1_FUNCT_C_OLT:
+                if(jit_use_native) {
+                  set_cc0_val = "native_flt(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                } else {
+                  set_cc0_val = "flt(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                }
+                break;
+              case COP1_FUNCT_C_OLE:
+                if(jit_use_native) {
+                  set_cc0_val = "native_fle(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                } else {
+                  set_cc0_val = "fle(" + fregnames[fs] + ", "
+                    + fregnames[ft] + ")";
+                }
+                break;
+              default:
+                fprintf(stderr, "error: COP1.S: unknown funct: %d\n", funct);
+                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                    pc*4, pword);
+                exit(1);
+            }
+            break;
+          case COP1_FMT_W:
+            switch(funct) {
+              case COP1_FUNCT_CVT_S:
+                set_freg = fd;
+                if(jit_use_native) {
+                  set_freg_val = "native_itof(" + fregnames[fs] + ")";
+                } else {
+                  set_freg_val = "itof(" + fregnames[fs] + ")";
+                }
+                break;
+              default:
+                fprintf(stderr, "error: COP1.W: unknown funct: %d\n", funct);
+                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                    pc*4, pword);
+                exit(1);
+            }
+            break;
+          default:
+            fprintf(stderr, "error: COP1: unknown fmt: %d\n", fmt);
+            fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                pc*4, pword);
+            exit(1);
+        }
+        break;
       case OPCODE_LW:
         set_reg = rt;
         set_reg_val =
@@ -292,6 +460,14 @@ void jit_main() {
     }
     if(set_reg) {
       body << "  " << regnames[set_reg] << " = " << set_reg_val << ";" << endl;
+    }
+    if(set_freg != -1) {
+      body << "  " << fregnames[set_freg] << " = "
+        << set_freg_val << ";" << endl;
+    }
+    if(set_cc0_val != "") {
+      body << "  cc0 = "
+        << set_cc0_val << ";" << endl;
     }
     if(branch_cond != "") {
       body << "  if(" << branch_cond << ") goto L" <<
@@ -316,6 +492,18 @@ void jit_main() {
   command << "gcc -std=c99 -O2 -Wall -Wextra -g ";
   command << "-o " << "tmp-qksim-compiled" << " ";
   command << "tmp-qksim-compiled.c ";
+  command << "fpu/C/fadd.o ";
+  command << "fpu/C/fcmp.o ";
+  command << "fpu/C/fdiv.o ";
+  command << "fpu/C/ffloor.o ";
+  command << "fpu/C/finv.o ";
+  command << "fpu/C/float.o ";
+  command << "fpu/C/fmul.o ";
+  command << "fpu/C/fsqrt.o ";
+  command << "fpu/C/ftoi.o ";
+  command << "fpu/C/itof.o ";
+  command << "native_fpu.o ";
+  command << "-lm ";
   cerr << command.str() << endl;
   int retval = system(command.str().c_str());
   if(retval < 0) {

@@ -14,6 +14,7 @@ int main(int argc, char *argv[]) {
   options1.add_options()
       ("sim,s", value<string>()->default_value("ils"),
                 "which implementation to use (ils,jit)")
+      ("native-fp", "use native floating-point unit")
       ("help,h", "show help")
   ;
   variables_map values;
@@ -21,6 +22,10 @@ int main(int argc, char *argv[]) {
     store(parse_command_line(argc, argv, options1), values);
     notify(values);
     string sim_impl = values["sim"].as<string>();
+    if(values.count("native-fp")) {
+      ils_use_native = true;
+      jit_use_native = true;
+    }
     if(values.count("help")) {
       cerr << options1 << endl;
     } else if(sim_impl == "ils") {

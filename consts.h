@@ -37,4 +37,22 @@
 #define FUNCT_SLT  052
 #define FUNCT_SLTU 053
 
+#define COP1_FMT_BRANCH 010
+#define COP1_FMT_MFC1   000
+#define COP1_FMT_MTC1   004
+#define COP1_FMT_S      020
+#define COP1_FMT_W      024
+
+#define COP1_FUNCT_ADD   000
+#define COP1_FUNCT_SUB   001
+#define COP1_FUNCT_MUL   002
+#define COP1_FUNCT_DIV   003
+#define COP1_FUNCT_SQRT  004
+#define COP1_FUNCT_MOV   006
+#define COP1_FUNCT_CVT_S 040
+#define COP1_FUNCT_CVT_W 044
+#define COP1_FUNCT_C_EQ  062
+#define COP1_FUNCT_C_OLT 064
+#define COP1_FUNCT_C_OLE 066
+
 #endif /* CONSTS_H_ */
