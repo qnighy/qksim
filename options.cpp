@@ -2,3 +2,4 @@
 
 bool use_native_fp = false;
 bool show_commit_log = false;
+bool show_statistics = false;

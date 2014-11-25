@@ -2,10 +2,20 @@
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
+#include <vector>
 #include "consts.h"
 #include "options.h"
 #include "ils.h"
 #include "qkfpu.h"
+using namespace std;
+
+static const char instnames[INSTRUCTION_NAME_MAX][8] = {
+  "sll", "srl", "sra", "sllv", "srlv", "srav", "jr", "jalr", "addu", "subu",
+  "and", "or", "xor", "nor", "slt", "sltu", "j", "jal", "beq", "bne",
+  "addiu", "slti", "sltiu", "andi", "ori", "xori", "lui", "lw", "sw",
+  "bc1f", "bc1t", "mtc1", "mfc1", "add.s", "sub.s", "mul.s", "div.s",
+  "sqrt.s", "mov.s", "cvt.s.w", "cvt.w.s", "c.eq.s", "c.olt.s", "c.ole.s"
+};
 
 static const char regnames[32][5] = {
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
@@ -43,7 +53,13 @@ static void rs232c_prereceive() {
   rs232c_recv_data = ch;
 }
 
-static void ils_run() {
+static int64_t instruction_count_all;
+static int64_t instruction_counts[INSTRUCTION_NAME_MAX];
+static int64_t branch_counts[1<<15];
+static int ils_run() {
+  instruction_count_all = 0;
+  fill(instruction_counts, instruction_counts+INSTRUCTION_NAME_MAX, 0);
+  fill(branch_counts, branch_counts+(1<<15), 0);
   int pc = 0;
   uint32_t reg[32], freg[32];
   bool cc0 = false;
@@ -51,7 +67,7 @@ static void ils_run() {
   std::fill(freg, freg+32, 0);
   rs232c_prereceive();
   for(;;) {
-    if(pc < 0 || pc >= (1<<20)) {
+    if(pc < 0 || pc >= (1<<15)) {
       fprintf(stderr, "error: program counter 0x%08x is out of range\n",
           pc*4);
       exit(1);
@@ -83,26 +99,32 @@ static void ils_run() {
           case FUNCT_SLL:
             set_reg = rd;
             set_reg_val = reg[rt] << sa;
+            ++instruction_counts[INSTRUCTION_NAME_SLL];
             break;
           case FUNCT_SRL:
             set_reg = rd;
             set_reg_val = reg[rt] >> sa;
+            ++instruction_counts[INSTRUCTION_NAME_SRL];
             break;
           case FUNCT_SRA:
             set_reg = rd;
             set_reg_val = (int32_t)reg[rt] >> sa;
+            ++instruction_counts[INSTRUCTION_NAME_SRA];
             break;
           case FUNCT_SLLV:
             set_reg = rd;
             set_reg_val = reg[rt] << (reg[rs]&31);
+            ++instruction_counts[INSTRUCTION_NAME_SLLV];
             break;
           case FUNCT_SRLV:
             set_reg = rd;
             set_reg_val = reg[rt] >> (reg[rs]&31);
+            ++instruction_counts[INSTRUCTION_NAME_SRLV];
             break;
           case FUNCT_SRAV:
             set_reg = rd;
             set_reg_val = (int32_t)reg[rt] >> (reg[rs]&31);
+            ++instruction_counts[INSTRUCTION_NAME_SRAV];
             break;
           case FUNCT_JR:
             if(reg[rs]&3) {
@@ -112,38 +134,47 @@ static void ils_run() {
             is_branch = true;
             branch_success = true;
             branch_target = reg[rs]>>2;
+            ++instruction_counts[INSTRUCTION_NAME_JR];
             break;
           case FUNCT_ADDU:
             set_reg = rd;
             set_reg_val = reg[rs] + reg[rt];
+            ++instruction_counts[INSTRUCTION_NAME_ADDU];
             break;
           case FUNCT_SUBU:
             set_reg = rd;
             set_reg_val = reg[rs] - reg[rt];
+            ++instruction_counts[INSTRUCTION_NAME_SUBU];
             break;
           case FUNCT_AND:
             set_reg = rd;
             set_reg_val = reg[rs] & reg[rt];
+            ++instruction_counts[INSTRUCTION_NAME_AND];
             break;
           case FUNCT_OR:
             set_reg = rd;
             set_reg_val = reg[rs] | reg[rt];
+            ++instruction_counts[INSTRUCTION_NAME_OR];
             break;
           case FUNCT_XOR:
             set_reg = rd;
             set_reg_val = reg[rs] ^ reg[rt];
+            ++instruction_counts[INSTRUCTION_NAME_XOR];
             break;
           case FUNCT_NOR:
             set_reg = rd;
             set_reg_val = ~(reg[rs] | reg[rt]);
+            ++instruction_counts[INSTRUCTION_NAME_NOR];
             break;
           case FUNCT_SLT:
             set_reg = rd;
             set_reg_val = ((int32_t)reg[rs] < (int32_t)reg[rt]);
+            ++instruction_counts[INSTRUCTION_NAME_SLT];
             break;
           case FUNCT_SLTU:
             set_reg = rd;
             set_reg_val = (reg[rs] < reg[rt]);
+            ++instruction_counts[INSTRUCTION_NAME_SLTU];
             break;
           default:
             fprintf(stderr, "error: SPECIAL: unknown funct: %d\n", funct);
@@ -156,6 +187,7 @@ static void ils_run() {
         is_branch = true;
         branch_success = true;
         branch_target = jt;
+        ++instruction_counts[INSTRUCTION_NAME_J];
         break;
       case OPCODE_JAL:
         is_branch = true;
@@ -163,44 +195,54 @@ static void ils_run() {
         branch_target = jt;
         set_reg = REG_RA;
         set_reg_val = (uint32_t)(pc + 1) * 4;
+        ++instruction_counts[INSTRUCTION_NAME_JAL];
         break;
       case OPCODE_BEQ:
         is_branch = true;
         branch_success = (reg[rs] == reg[rt]);
         branch_target = pc+1+simm16;
+        ++instruction_counts[INSTRUCTION_NAME_BEQ];
         break;
       case OPCODE_BNE:
         is_branch = true;
         branch_success = (reg[rs] != reg[rt]);
         branch_target = pc+1+simm16;
+        ++instruction_counts[INSTRUCTION_NAME_BNE];
         break;
       case OPCODE_ADDIU:
         set_reg = rt;
         set_reg_val = reg[rs] + simm16;
+        ++instruction_counts[INSTRUCTION_NAME_ADDIU];
         break;
       case OPCODE_SLTI:
         set_reg = rt;
         set_reg_val = ((int32_t)reg[rs] < (int32_t)simm16);
+        ++instruction_counts[INSTRUCTION_NAME_SLTI];
         break;
       case OPCODE_SLTIU:
         set_reg = rt;
         set_reg_val = (reg[rs] < simm16);
+        ++instruction_counts[INSTRUCTION_NAME_SLTIU];
         break;
       case OPCODE_ANDI:
         set_reg = rt;
         set_reg_val = reg[rs] & uimm16;
+        ++instruction_counts[INSTRUCTION_NAME_ANDI];
         break;
       case OPCODE_ORI:
         set_reg = rt;
         set_reg_val = reg[rs] | uimm16;
+        ++instruction_counts[INSTRUCTION_NAME_ORI];
         break;
       case OPCODE_XORI:
         set_reg = rt;
         set_reg_val = reg[rs] ^ uimm16;
+        ++instruction_counts[INSTRUCTION_NAME_XORI];
         break;
       case OPCODE_LUI:
         set_reg = rt;
         set_reg_val = (uint32_t)uimm16 << 16;
+        ++instruction_counts[INSTRUCTION_NAME_LUI];
         break;
       case OPCODE_COP1:
         switch(fmt) {
@@ -209,10 +251,12 @@ static void ils_run() {
               is_branch = true;
               branch_success = !cc0;
               branch_target = pc+1+simm16;
+              ++instruction_counts[INSTRUCTION_NAME_FP_BC1F];
             } else if(ft == 1) {
               is_branch = true;
               branch_success = cc0;
               branch_target = pc+1+simm16;
+              ++instruction_counts[INSTRUCTION_NAME_FP_BC1T];
             } else {
               fprintf(stderr, "error: BC1x: unknown condition: %d\n", ft);
               fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
@@ -223,10 +267,12 @@ static void ils_run() {
           case COP1_FMT_MFC1:
             set_reg = rt;
             set_reg_val = freg[fs];
+            ++instruction_counts[INSTRUCTION_NAME_FP_MFC1];
             break;
           case COP1_FMT_MTC1:
             set_freg = fs;
             set_freg_val = reg[rt];
+            ++instruction_counts[INSTRUCTION_NAME_FP_MTC1];
             break;
           case COP1_FMT_S:
             switch(funct) {
@@ -237,6 +283,7 @@ static void ils_run() {
                 } else {
                   set_freg_val = fadd(freg[fs], freg[ft]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_ADD_S];
                 break;
               case COP1_FUNCT_SUB:
                 set_freg = fd;
@@ -245,6 +292,7 @@ static void ils_run() {
                 } else {
                   set_freg_val = fsub(freg[fs], freg[ft]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_SUB_S];
                 break;
               case COP1_FUNCT_MUL:
                 set_freg = fd;
@@ -253,6 +301,7 @@ static void ils_run() {
                 } else {
                   set_freg_val = fmul(freg[fs], freg[ft]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_MUL_S];
                 break;
               case COP1_FUNCT_DIV:
                 set_freg = fd;
@@ -261,6 +310,7 @@ static void ils_run() {
                 } else {
                   set_freg_val = fdiv(freg[fs], freg[ft]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_DIV_S];
                 break;
               case COP1_FUNCT_SQRT:
                 set_freg = fd;
@@ -269,10 +319,12 @@ static void ils_run() {
                 } else {
                   set_freg_val = fsqrt(freg[fs]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_SQRT_S];
                 break;
               case COP1_FUNCT_MOV:
                 set_freg = fd;
                 set_freg_val = freg[fs];
+                ++instruction_counts[INSTRUCTION_NAME_FP_MOV_S];
                 break;
               case COP1_FUNCT_CVT_W:
                 set_freg = fd;
@@ -281,6 +333,7 @@ static void ils_run() {
                 } else {
                   set_freg_val = ftoi(freg[fs]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_CVT_W_S];
                 break;
               case COP1_FUNCT_C_EQ:
                 if(use_native_fp) {
@@ -288,6 +341,7 @@ static void ils_run() {
                 } else {
                   cc0 = feq(freg[fs], freg[ft]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_C_EQ_S];
                 break;
               case COP1_FUNCT_C_OLT:
                 if(use_native_fp) {
@@ -295,6 +349,7 @@ static void ils_run() {
                 } else {
                   cc0 = flt(freg[fs], freg[ft]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_C_OLT_S];
                 break;
               case COP1_FUNCT_C_OLE:
                 if(use_native_fp) {
@@ -302,6 +357,7 @@ static void ils_run() {
                 } else {
                   cc0 = fle(freg[fs], freg[ft]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_C_OLE_S];
                 break;
               default:
                 fprintf(stderr, "error: COP1.S: unknown funct: %d\n", funct);
@@ -319,6 +375,7 @@ static void ils_run() {
                 } else {
                   set_freg_val = itof(freg[fs]);
                 }
+                ++instruction_counts[INSTRUCTION_NAME_FP_CVT_S_W];
                 break;
               default:
                 fprintf(stderr, "error: COP1.W: unknown funct: %d\n", funct);
@@ -353,7 +410,7 @@ static void ils_run() {
         } else if(addr == 0xFFFF0004U) {
           if(rs232c_recv_status < 0) {
             fprintf(stderr, "LW: End of File reached. Halt.\n");
-            exit(0);
+            return 0;
           } else if(rs232c_recv_status > 0) {
             fprintf(stderr, "error: LW: tried to read unready data\n");
             exit(1);
@@ -371,6 +428,7 @@ static void ils_run() {
           fprintf(stderr, "error: LW: out of range: 0x%08x\n", addr);
           exit(1);
         }
+        ++instruction_counts[INSTRUCTION_NAME_LW];
         break;
       }
       case OPCODE_SW: {
@@ -397,6 +455,7 @@ static void ils_run() {
           fprintf(stderr, "error: LW: out of range: 0x%08x\n", addr);
           exit(1);
         }
+        ++instruction_counts[INSTRUCTION_NAME_SW];
         break;
       }
       default:
@@ -429,9 +488,11 @@ static void ils_run() {
     }
     if(branch_success) {
       pc = branch_target;
+      ++branch_counts[pc];
     } else {
       pc = pc + 1;
     }
+    ++instruction_count_all;
   }
 }
 
@@ -450,5 +511,44 @@ void ils_main() {
     ram[load_pc++] = load_pword;
   }
   for(int i = 0; i < 32; ++i) ram[load_pc++] = 0U;
-  ils_run();
+  int retval = ils_run();
+  if(show_statistics) {
+    fprintf(stderr, "\n");
+    {
+      fprintf(stderr, "instruction count by types:\n");
+      vector<pair<int64_t,int>> v;
+      for(int i = 0; i < INSTRUCTION_NAME_MAX; ++i) {
+        if(instruction_counts[i]) {
+          v.emplace_back(instruction_counts[i],i);
+        }
+      }
+      sort(v.begin(), v.end());
+      reverse(v.begin(), v.end());
+      for(pair<int64_t,int> ci : v) {
+        fprintf(stderr, "%10s : %12lld\n", instnames[ci.second],
+            (long long int)ci.first);
+      }
+      fprintf(stderr, "---------------------------\n");
+      fprintf(stderr, "%10s : %12lld\n", "SUM",
+          (long long int)instruction_count_all);
+    }
+    fprintf(stderr, "\n\n");
+    fprintf(stderr, "successful branch count by targets:\n");
+    {
+      vector<pair<int64_t,int>> v;
+      for(int i = 0; i < (1<<15); ++i) {
+        if(branch_counts[i]) {
+          v.emplace_back(branch_counts[i], i);
+        }
+      }
+      sort(v.begin(), v.end());
+      reverse(v.begin(), v.end());
+      for(pair<int64_t,int> ci : v) {
+        fprintf(stderr, "0x%08x : %12lld\n", ci.second*4,
+            (long long int)ci.first);
+      }
+    }
+    fprintf(stderr, "\n");
+  }
+  exit(retval);
 }

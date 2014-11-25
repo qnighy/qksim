@@ -17,6 +17,7 @@ int main(int argc, char *argv[]) {
                 "which implementation to use (ils,jit)")
       ("native-fp,n", "use native floating-point unit")
       ("show-commit-log,c", "show commit log")
+      ("show-statistics,t", "show statistics")
       ("help,h", "show help")
   ;
   variables_map values;
@@ -26,6 +27,7 @@ int main(int argc, char *argv[]) {
     string sim_impl = values["sim"].as<string>();
     if(values.count("native-fp")) use_native_fp = true;
     if(values.count("show-commit-log")) show_commit_log = true;
+    if(values.count("show-statistics")) show_statistics = true;
     if(values.count("help")) {
       cerr << options1 << endl;
     } else if(sim_impl == "ils") {
