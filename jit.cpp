@@ -12,10 +12,9 @@
 #include <iostream>
 #include <iomanip>
 #include "consts.h"
+#include "options.h"
 #include "jit.h"
 using namespace std;
-
-bool jit_use_native = false;
 
 static string regnames[32] = {
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
@@ -322,7 +321,7 @@ void jit_main() {
             switch(funct) {
               case COP1_FUNCT_ADD:
                 set_freg = fd;
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_freg_val =
                     "native_fadd(" + fregnames[fs] + ", "
                     + fregnames[ft] + ")";
@@ -333,7 +332,7 @@ void jit_main() {
                 break;
               case COP1_FUNCT_SUB:
                 set_freg = fd;
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_freg_val =
                     "native_fsub(" + fregnames[fs] + ", "
                     + fregnames[ft] + ")";
@@ -344,7 +343,7 @@ void jit_main() {
                 break;
               case COP1_FUNCT_MUL:
                 set_freg = fd;
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_freg_val =
                     "native_fmul(" + fregnames[fs] + ", "
                     + fregnames[ft] + ")";
@@ -355,7 +354,7 @@ void jit_main() {
                 break;
               case COP1_FUNCT_DIV:
                 set_freg = fd;
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_freg_val =
                     "native_fdiv(" + fregnames[fs] + ", "
                     + fregnames[ft] + ")";
@@ -366,7 +365,7 @@ void jit_main() {
                 break;
               case COP1_FUNCT_SQRT:
                 set_freg = fd;
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_freg_val = "native_fsqrt(" + fregnames[fs] + ")";
                 } else {
                   set_freg_val = "fsqrt(" + fregnames[fs] + ")";
@@ -378,14 +377,14 @@ void jit_main() {
                 break;
               case COP1_FUNCT_CVT_W:
                 set_freg = fd;
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_freg_val = "native_ftoi(" + fregnames[fs] + ")";
                 } else {
                   set_freg_val = "ftoi(" + fregnames[fs] + ")";
                 }
                 break;
               case COP1_FUNCT_C_EQ:
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_cc0_val = "native_feq(" + fregnames[fs] + ", "
                     + fregnames[ft] + ")";
                 } else {
@@ -394,7 +393,7 @@ void jit_main() {
                 }
                 break;
               case COP1_FUNCT_C_OLT:
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_cc0_val = "native_flt(" + fregnames[fs] + ", "
                     + fregnames[ft] + ")";
                 } else {
@@ -403,7 +402,7 @@ void jit_main() {
                 }
                 break;
               case COP1_FUNCT_C_OLE:
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_cc0_val = "native_fle(" + fregnames[fs] + ", "
                     + fregnames[ft] + ")";
                 } else {
@@ -422,7 +421,7 @@ void jit_main() {
             switch(funct) {
               case COP1_FUNCT_CVT_S:
                 set_freg = fd;
-                if(jit_use_native) {
+                if(use_native_fp) {
                   set_freg_val = "native_itof(" + fregnames[fs] + ")";
                 } else {
                   set_freg_val = "itof(" + fregnames[fs] + ")";

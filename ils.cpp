@@ -3,18 +3,17 @@
 #include <cstdio>
 #include <algorithm>
 #include "consts.h"
+#include "options.h"
 #include "ils.h"
 #include "qkfpu.h"
 
-bool ils_use_native = false;
-
-static char regnames[32][5] = {
+static const char regnames[32][5] = {
   "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3",
   "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
   "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
   "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"
 };
-static char fregnames[32][4] = {
+static const char fregnames[32][4] = {
   "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7",
   "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
   "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23",
@@ -71,6 +70,7 @@ static void ils_run() {
     uint32_t uimm16 = (uint16_t)pword;
     uint32_t simm16 = (int16_t)pword;
     int jt = (pc>>26<<26)|(pword&((1U<<26)-1));
+    bool is_branch = false;
     bool branch_success = false;
     int branch_target = -1;
     int set_reg = 0;
@@ -109,6 +109,7 @@ static void ils_run() {
               fprintf(stderr, "error: JR: unaligned jump: 0x%08x\n", reg[rs]);
               exit(1);
             }
+            is_branch = true;
             branch_success = true;
             branch_target = reg[rs]>>2;
             break;
@@ -152,20 +153,24 @@ static void ils_run() {
         }
         break;
       case OPCODE_J:
+        is_branch = true;
         branch_success = true;
         branch_target = jt;
         break;
       case OPCODE_JAL:
+        is_branch = true;
         branch_success = true;
         branch_target = jt;
         set_reg = REG_RA;
         set_reg_val = (uint32_t)(pc + 1) * 4;
         break;
       case OPCODE_BEQ:
+        is_branch = true;
         branch_success = (reg[rs] == reg[rt]);
         branch_target = pc+1+simm16;
         break;
       case OPCODE_BNE:
+        is_branch = true;
         branch_success = (reg[rs] != reg[rt]);
         branch_target = pc+1+simm16;
         break;
@@ -201,9 +206,11 @@ static void ils_run() {
         switch(fmt) {
           case COP1_FMT_BRANCH:
             if(ft == 0) {
+              is_branch = true;
               branch_success = !cc0;
               branch_target = pc+1+simm16;
             } else if(ft == 1) {
+              is_branch = true;
               branch_success = cc0;
               branch_target = pc+1+simm16;
             } else {
@@ -225,7 +232,7 @@ static void ils_run() {
             switch(funct) {
               case COP1_FUNCT_ADD:
                 set_freg = fd;
-                if(ils_use_native) {
+                if(use_native_fp) {
                   set_freg_val = native_fadd(freg[fs], freg[ft]);
                 } else {
                   set_freg_val = fadd(freg[fs], freg[ft]);
@@ -233,7 +240,7 @@ static void ils_run() {
                 break;
               case COP1_FUNCT_SUB:
                 set_freg = fd;
-                if(ils_use_native) {
+                if(use_native_fp) {
                   set_freg_val = native_fsub(freg[fs], freg[ft]);
                 } else {
                   set_freg_val = fsub(freg[fs], freg[ft]);
@@ -241,7 +248,7 @@ static void ils_run() {
                 break;
               case COP1_FUNCT_MUL:
                 set_freg = fd;
-                if(ils_use_native) {
+                if(use_native_fp) {
                   set_freg_val = native_fmul(freg[fs], freg[ft]);
                 } else {
                   set_freg_val = fmul(freg[fs], freg[ft]);
@@ -249,7 +256,7 @@ static void ils_run() {
                 break;
               case COP1_FUNCT_DIV:
                 set_freg = fd;
-                if(ils_use_native) {
+                if(use_native_fp) {
                   set_freg_val = native_fdiv(freg[fs], freg[ft]);
                 } else {
                   set_freg_val = fdiv(freg[fs], freg[ft]);
@@ -257,7 +264,7 @@ static void ils_run() {
                 break;
               case COP1_FUNCT_SQRT:
                 set_freg = fd;
-                if(ils_use_native) {
+                if(use_native_fp) {
                   set_freg_val = native_fsqrt(freg[fs]);
                 } else {
                   set_freg_val = fsqrt(freg[fs]);
@@ -269,28 +276,28 @@ static void ils_run() {
                 break;
               case COP1_FUNCT_CVT_W:
                 set_freg = fd;
-                if(ils_use_native) {
+                if(use_native_fp) {
                   set_freg_val = native_ftoi(freg[fs]);
                 } else {
                   set_freg_val = ftoi(freg[fs]);
                 }
                 break;
               case COP1_FUNCT_C_EQ:
-                if(ils_use_native) {
+                if(use_native_fp) {
                   cc0 = native_feq(freg[fs], freg[ft]);
                 } else {
                   cc0 = feq(freg[fs], freg[ft]);
                 }
                 break;
               case COP1_FUNCT_C_OLT:
-                if(ils_use_native) {
+                if(use_native_fp) {
                   cc0 = native_flt(freg[fs], freg[ft]);
                 } else {
                   cc0 = flt(freg[fs], freg[ft]);
                 }
                 break;
               case COP1_FUNCT_C_OLE:
-                if(ils_use_native) {
+                if(use_native_fp) {
                   cc0 = native_fle(freg[fs], freg[ft]);
                 } else {
                   cc0 = fle(freg[fs], freg[ft]);
@@ -307,7 +314,7 @@ static void ils_run() {
             switch(funct) {
               case COP1_FUNCT_CVT_S:
                 set_freg = fd;
-                if(ils_use_native) {
+                if(use_native_fp) {
                   set_freg_val = native_itof(freg[fs]);
                 } else {
                   set_freg_val = itof(freg[fs]);
@@ -372,6 +379,10 @@ static void ils_run() {
           fprintf(stderr, "error: SW: unaligned access: 0x%08x\n", addr);
           exit(1);
         }
+        if(show_commit_log) {
+          fprintf(stderr, "pc=0x%08x: Memory[0x%08x] <- 0x%08x\n",
+              pc*4, addr, reg[rt]);
+        }
         if(addr <= (1U<<22)) {
           ram[addr>>2] = reg[rt];
         } else if(addr == 0xFFFF000CU) {
@@ -396,13 +407,25 @@ static void ils_run() {
     }
     if(set_reg) {
       reg[set_reg] = set_reg_val;
-      // fprintf(stderr, "pc=0x%08x: $%s <- 0x%08x\n",
-      //     pc*4, regnames[set_reg], set_reg_val);
+      if(show_commit_log) {
+        fprintf(stderr, "pc=0x%08x: $%s <- 0x%08x\n",
+            pc*4, regnames[set_reg], set_reg_val);
+      }
     }
     if(set_freg != -1) {
       freg[set_freg] = set_freg_val;
-      // fprintf(stderr, "pc=0x%08x: $%s <- 0x%08x\n",
-      //     pc*4, fregnames[set_freg], set_freg_val);
+      if(show_commit_log) {
+        fprintf(stderr, "pc=0x%08x: $%s <- 0x%08x\n",
+            pc*4, fregnames[set_freg], set_freg_val);
+      }
+    }
+    if(is_branch && show_commit_log) {
+      if(branch_success) {
+        fprintf(stderr, "pc=0x%08x: branch taken, 0x%08x\n",
+            pc*4, branch_target*4);
+      } else {
+        fprintf(stderr, "pc=0x%08x: branch not taken\n", pc*4);
+      }
     }
     if(branch_success) {
       pc = branch_target;
