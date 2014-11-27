@@ -47,57 +47,6 @@ inline string hex_repr(uint32_t i) {
 }
 
 void jit_main() {
-  ostringstream prologue;
-  ostringstream body;
-  ostringstream epilogue;
-  prologue << "#include <stdio.h>" << endl;
-  prologue << "#include <stdlib.h>" << endl;
-  prologue << "#include <stdint.h>" << endl;
-  prologue << "#include \"qkfpu.h\"" << endl;
-  prologue << "" << endl;
-  prologue << "uint32_t ram[1<<20];" << endl;
-  prologue << "" << endl;
-  prologue << "inline uint32_t load_word(uint32_t addr) {" << endl;
-  prologue << "  if(addr & 0x80000000) {" << endl;
-  prologue << "    if(addr == 0xFFFF0000U) {" << endl;
-  prologue << "      return 1;" << endl;
-  prologue << "    }" << endl;
-  prologue << "    if(addr == 0xFFFF0004U) {" << endl;
-  prologue << "      unsigned char ch;" << endl;
-  prologue << "      size_t readsize = fread(&ch,1,1,stdin);" << endl;
-  prologue << "      if(readsize<1) exit(0);" << endl;
-  prologue << "      return ch;" << endl;
-  prologue << "    }" << endl;
-  prologue << "    if(addr == 0xFFFF0008U) {" << endl;
-  prologue << "      return 1;" << endl;
-  prologue << "    }" << endl;
-  prologue << "  } else {" << endl;
-  prologue << "    return ram[addr>>2];" << endl;
-  prologue << "  }" << endl;
-  prologue << "}" << endl;
-  prologue << "" << endl;
-  prologue << "inline void store_word(uint32_t addr, uint32_t val) {" << endl;
-  prologue << "  if(addr & 0x80000000) {" << endl;
-  prologue << "    if(addr == 0xFFFF000CU) {" << endl;
-  prologue << "      unsigned char ch = val;" << endl;
-  prologue << "      fwrite(&ch,1,1,stdout);" << endl;
-  prologue << "    }" << endl;
-  prologue << "  } else {" << endl;
-  prologue << "    ram[addr>>2] = val;" << endl;
-  prologue << "  }" << endl;
-  prologue << "}" << endl;
-  prologue << "" << endl;
-  prologue << "int main() {" << endl;
-  for(int i = 1; i < 32; ++i) {
-    prologue << "  uint32_t " << regnames[i] << " = 0U;" << endl;
-  }
-  for(int i = 0; i < 32; ++i) {
-    prologue << "  uint32_t " << fregnames[i] << " = 0U;" << endl;
-  }
-  prologue << "  int cc0 = 0;" << endl;
-  epilogue << "  return 0;" << endl;
-  epilogue << "}" << endl;
-
   vector<uint32_t> ram(1<<20);
   int load_pc = 0;
   for(;;) {
@@ -128,6 +77,65 @@ void jit_main() {
       intmp << ch;
     }
   }
+
+  ostringstream prologue;
+  ostringstream body;
+  ostringstream epilogue;
+  prologue << "#include <stdio.h>" << endl;
+  prologue << "#include <stdlib.h>" << endl;
+  prologue << "#include <stdint.h>" << endl;
+  prologue << "#include \"qkfpu.h\"" << endl;
+  prologue << "" << endl;
+  prologue << "uint32_t ram[1<<20] = {" << endl;
+  for(int i = 0; i < load_pc; ++i) {
+    prologue << "  " << hex_repr(ram[i]);
+    if(i < load_pc+1) prologue << ", ";
+    prologue << endl;
+  }
+  prologue << "};" << endl;
+  prologue << "" << endl;
+  // prologue << "inline uint32_t load_word(uint32_t addr) {" << endl;
+  prologue << "uint32_t load_word(uint32_t addr) {" << endl;
+  prologue << "  if(addr & 0x80000000) {" << endl;
+  prologue << "    if(addr == 0xFFFF0000U) {" << endl;
+  prologue << "      return 1;" << endl;
+  prologue << "    }" << endl;
+  prologue << "    if(addr == 0xFFFF0004U) {" << endl;
+  prologue << "      unsigned char ch;" << endl;
+  prologue << "      size_t readsize = fread(&ch,1,1,stdin);" << endl;
+  prologue << "      if(readsize<1) exit(0);" << endl;
+  prologue << "      return ch;" << endl;
+  prologue << "    }" << endl;
+  prologue << "    if(addr == 0xFFFF0008U) {" << endl;
+  prologue << "      return 1;" << endl;
+  prologue << "    }" << endl;
+  prologue << "  } else {" << endl;
+  prologue << "    return ram[addr>>2];" << endl;
+  prologue << "  }" << endl;
+  prologue << "}" << endl;
+  prologue << "" << endl;
+  // prologue << "inline void store_word(uint32_t addr, uint32_t val) {" << endl;
+  prologue << "void store_word(uint32_t addr, uint32_t val) {" << endl;
+  prologue << "  if(addr & 0x80000000) {" << endl;
+  prologue << "    if(addr == 0xFFFF000CU) {" << endl;
+  prologue << "      unsigned char ch = val;" << endl;
+  prologue << "      fwrite(&ch,1,1,stdout);" << endl;
+  prologue << "    }" << endl;
+  prologue << "  } else {" << endl;
+  prologue << "    ram[addr>>2] = val;" << endl;
+  prologue << "  }" << endl;
+  prologue << "}" << endl;
+  prologue << "" << endl;
+  prologue << "int main() {" << endl;
+  for(int i = 1; i < 32; ++i) {
+    prologue << "  uint32_t " << regnames[i] << " = 0U;" << endl;
+  }
+  for(int i = 0; i < 32; ++i) {
+    prologue << "  uint32_t " << fregnames[i] << " = 0U;" << endl;
+  }
+  prologue << "  int cc0 = 0;" << endl;
+  epilogue << "  return 0;" << endl;
+  epilogue << "}" << endl;
 
   prologue << "  static const void *labels[" << dec_repr(load_pc) << "] = {"
     << endl;
@@ -238,10 +246,12 @@ void jit_main() {
               "(" + use_regnames(rs) + " < " + use_regnames(rt) + ")";
             break;
           default:
-            fprintf(stderr, "error: SPECIAL: unknown funct: %d\n", funct);
-            fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-                pc*4, pword);
-            exit(1);
+            body << "  fprintf(stderr, \"error: SPECIAL: unknown funct: "
+              << dec_repr(funct) << "\\n\");" << endl;
+            body << "  fprintf(stderr, \"pc = "
+              << hex_repr(pc*4) << ", pword = "
+              << hex_repr(pword) << "\\n\");" << endl;
+            body << "  exit(1);" << endl;
         }
         break;
       case OPCODE_J:
@@ -303,10 +313,12 @@ void jit_main() {
               branch_cond = "cc0";
               branch_target = pc+1+simm16;
             } else {
-              fprintf(stderr, "error: BC1x: unknown condition: %d\n", ft);
-              fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-                  pc*4, pword);
-              exit(1);
+              body << "  fprintf(stderr, \"error: BC1x: unknown condition: "
+                << dec_repr(ft) << "\\n\");" << endl;
+              body << "  fprintf(stderr, \"pc = "
+                << hex_repr(pc*4) << ", pword = "
+                << hex_repr(pword) << "\\n\");" << endl;
+              body << "  exit(1);" << endl;
             }
             break;
           case COP1_FMT_MFC1:
@@ -411,10 +423,12 @@ void jit_main() {
                 }
                 break;
               default:
-                fprintf(stderr, "error: COP1.S: unknown funct: %d\n", funct);
-                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-                    pc*4, pword);
-                exit(1);
+                body << "  fprintf(stderr, \"error: COP1.S: unknown funct: "
+                  << dec_repr(funct) << "\\n\");" << endl;
+                body << "  fprintf(stderr, \"pc = "
+                  << hex_repr(pc*4) << ", pword = "
+                  << hex_repr(pword) << "\\n\");" << endl;
+                body << "  exit(1);" << endl;
             }
             break;
           case COP1_FMT_W:
@@ -428,17 +442,21 @@ void jit_main() {
                 }
                 break;
               default:
-                fprintf(stderr, "error: COP1.W: unknown funct: %d\n", funct);
-                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-                    pc*4, pword);
-                exit(1);
+                body << "  fprintf(stderr, \"error: COP1.W: unknown funct: "
+                  << dec_repr(funct) << "\\n\");" << endl;
+                body << "  fprintf(stderr, \"pc = "
+                  << hex_repr(pc*4) << ", pword = "
+                  << hex_repr(pword) << "\\n\");" << endl;
+                body << "  exit(1);" << endl;
             }
             break;
           default:
-            fprintf(stderr, "error: COP1: unknown fmt: %d\n", fmt);
-            fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-                pc*4, pword);
-            exit(1);
+            body << "  fprintf(stderr, \"error: COP1: unknown fmt: "
+              << dec_repr(fmt) << "\\n\");" << endl;
+            body << "  fprintf(stderr, \"pc = "
+              << hex_repr(pc*4) << ", pword = "
+              << hex_repr(pword) << "\\n\");" << endl;
+            body << "  exit(1);" << endl;
         }
         break;
       case OPCODE_LW:
@@ -452,10 +470,12 @@ void jit_main() {
           ", " + use_regnames(rt) + ");" << endl;
         break;
       default:
-        fprintf(stderr, "error: unknown opcode: %d\n", opcode);
-        fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-            pc*4, pword);
-        exit(1);
+        body << "  fprintf(stderr, \"error: COP1: unknown opcode: "
+          << dec_repr(opcode) << "\\n\");" << endl;
+        body << "  fprintf(stderr, \"pc = "
+          << hex_repr(pc*4) << ", pword = "
+          << hex_repr(pword) << "\\n\");" << endl;
+        body << "  exit(1);" << endl;
     }
     if(set_reg) {
       body << "  " << regnames[set_reg] << " = " << set_reg_val << ";" << endl;
@@ -488,7 +508,8 @@ void jit_main() {
   }
 
   ostringstream command;
-  command << "gcc -std=c99 -O2 -Wall -Wextra -g ";
+  // command << "gcc -std=c99 -O2 -Wall -Wextra -g ";
+  command << "gcc -std=c99 -Wall -Wextra -g ";
   command << "-o " << "tmp-qksim-compiled" << " ";
   command << "tmp-qksim-compiled.c ";
   command << "fpu/C/fadd.o ";
