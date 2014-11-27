@@ -31,6 +31,7 @@ static const char fregnames[32][4] = {
 };
 
 static uint32_t ram[1<<20];
+static bool ram_initialization[1<<20];
 static const int rs232c_recv_count = 2;
 static int rs232c_recv_status;
 static uint32_t rs232c_recv_data;
@@ -399,6 +400,10 @@ static int ils_run() {
           exit(1);
         }
         if(addr <= (1U<<22)) {
+          if(!ram_initialization[addr>>2]) {
+            fprintf(stderr, "error: LW: tried to read uninitialized data\n");
+            exit(1);
+          }
           set_reg_val = ram[addr>>2];
         } else if(addr == 0xFFFF0000U) {
           if(rs232c_recv_status > 0) {
@@ -442,6 +447,7 @@ static int ils_run() {
               pc*4, addr, reg[rt]);
         }
         if(addr <= (1U<<22)) {
+          ram_initialization[addr>>2] = true;
           ram[addr>>2] = reg[rt];
         } else if(addr == 0xFFFF000CU) {
           if(rs232c_send_status > 0) {
@@ -498,6 +504,7 @@ static int ils_run() {
 
 void ils_main() {
   std::fill(ram,ram+(1<<20),0x55555555U);
+  std::fill(ram_initialization,ram_initialization+(1<<20),false);
   int load_pc = 0;
   for(;;) {
     unsigned char chs[4];
@@ -508,6 +515,7 @@ void ils_main() {
     }
     uint32_t load_pword = (chs[0]<<24)|(chs[1]<<16)|(chs[2]<<8)|chs[3];
     if(load_pword == (uint32_t)-1) break;
+    ram_initialization[load_pc] = true;
     ram[load_pc++] = load_pword;
   }
   for(int i = 0; i < 32; ++i) ram[load_pc++] = 0U;
