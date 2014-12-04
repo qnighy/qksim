@@ -26,7 +26,7 @@ uint32_t native_fsub(uint32_t a, uint32_t b) {
 uint32_t native_fmul(uint32_t a, uint32_t b) {
   return reinterp_u(reinterp_f(a) * reinterp_f(b));
 }
-uint32_t native_itof(uint32_t a) { return reinterp_u((float)a); }
+uint32_t native_itof(uint32_t a) { return reinterp_u((float)(int32_t)a); }
 uint32_t native_ftoi(uint32_t a) { return (int32_t)reinterp_f(a); }
 
 int native_feq(uint32_t a, uint32_t b) {
