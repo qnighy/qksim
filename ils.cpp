@@ -137,6 +137,23 @@ static int ils_run() {
             branch_target = reg[rs]>>2;
             ++instruction_counts[INSTRUCTION_NAME_JR];
             break;
+          case FUNCT_JALR:
+            if(rs == rd) {
+              fprintf(stderr, "error: JALR: rs and rd must be different\n");
+              exit(1);
+            }
+            if(reg[rs]&3) {
+              fprintf(stderr, "error: JR: unaligned jump: 0x%08x\n", reg[rs]);
+              exit(1);
+            }
+            is_branch = true;
+            branch_success = true;
+            branch_target = reg[rs]>>2;
+            set_reg = REG_RA;
+            set_reg_val = (uint32_t)(pc + 1) * 4;
+            // TODO
+            ++instruction_counts[INSTRUCTION_NAME_JR];
+            break;
           case FUNCT_ADDU:
             set_reg = rd;
             set_reg_val = reg[rs] + reg[rt];
