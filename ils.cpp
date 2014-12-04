@@ -511,7 +511,9 @@ static int ils_run() {
     }
     if(branch_success) {
       pc = branch_target;
-      ++branch_counts[pc];
+      if(0 <= pc && pc < (1<<15)) {
+        ++branch_counts[pc];
+      }
     } else {
       pc = pc + 1;
     }
