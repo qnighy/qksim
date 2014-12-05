@@ -19,6 +19,8 @@
 #define OPCODE_COP1    021
 #define OPCODE_LW      043
 #define OPCODE_SW      053
+#define OPCODE_LWC1    061
+#define OPCODE_SWC1    071
 
 #define FUNCT_SLL  000
 #define FUNCT_SRL  002

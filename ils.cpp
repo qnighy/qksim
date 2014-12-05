@@ -409,8 +409,13 @@ static int ils_run() {
             exit(1);
         }
         break;
-      case OPCODE_LW: {
-        set_reg = rt;
+      case OPCODE_LW:
+      case OPCODE_LWC1: {
+        if(opcode == OPCODE_LW) {
+          set_reg = rt;
+        } else {
+          set_freg = ft;
+        }
         uint32_t addr = reg[rs] + simm16;
         if(addr&3) {
           fprintf(stderr, "error: LW: unaligned access: 0x%08x\n", addr);
@@ -450,28 +455,31 @@ static int ils_run() {
           fprintf(stderr, "error: LW: out of range: 0x%08x\n", addr);
           exit(1);
         }
+        set_freg_val = set_reg_val;
         ++instruction_counts[INSTRUCTION_NAME_LW];
         break;
       }
-      case OPCODE_SW: {
+      case OPCODE_SW:
+      case OPCODE_SWC1: {
         uint32_t addr = reg[rs] + simm16;
+        uint32_t wrval = opcode == OPCODE_SW ? reg[rt] : freg[ft];
         if(addr&3) {
           fprintf(stderr, "error: SW: unaligned access: 0x%08x\n", addr);
           exit(1);
         }
         if(show_commit_log) {
           fprintf(stderr, "pc=0x%08x: Memory[0x%08x] <- 0x%08x\n",
-              pc*4, addr, reg[rt]);
+              pc*4, addr, wrval);
         }
         if(addr <= (1U<<22)) {
           ram_initialization[addr>>2] = true;
-          ram[addr>>2] = reg[rt];
+          ram[addr>>2] = wrval;
         } else if(addr == 0xFFFF000CU) {
           if(rs232c_send_status > 0) {
             fprintf(stderr, "error: SW: tried to send to unready port\n");
             exit(1);
           }
-          unsigned char ch = reg[rt];
+          unsigned char ch = wrval;
           fwrite(&ch,1,1,stdout);
           rs232c_send_status = rs232c_send_count-1;
         } else {
