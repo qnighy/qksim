@@ -209,6 +209,21 @@ void jit_main() {
             jump_success = true;
             jump_target_reg = rs;
             break;
+          case FUNCT_JALR:
+            if(rs == rd) {
+              body << "  fprintf(stderr, \"error: JALR: "
+                << "rs and rd must be different\\n\");" << endl;
+              body << "  fprintf(stderr, \"pc = "
+                << hex_repr(pc*4) << ", pword = "
+                << hex_repr(pword) << "\\n\");" << endl;
+              body << "  exit(1);" << endl;
+            } else {
+              jump_success = true;
+              jump_target_reg = rs;
+              set_reg = REG_RA;
+              set_reg_val = hex_repr((pc+1)*4);
+            }
+            break;
           case FUNCT_ADDU:
             set_reg = rd;
             set_reg_val = use_regnames(rs) + " + " + use_regnames(rt);
@@ -464,10 +479,20 @@ void jit_main() {
         set_reg_val =
           "load_word(" + use_regnames(rs) + " + " + hex_repr(simm16) + ")";
         break;
+      case OPCODE_LWC1:
+        set_freg = ft;
+        set_freg_val =
+          "load_word(" + use_regnames(rs) + " + " + hex_repr(simm16) + ")";
+        break;
       case OPCODE_SW:
         body <<
           "  store_word(" + use_regnames(rs) + " + " + hex_repr(simm16) +
           ", " + use_regnames(rt) + ");" << endl;
+        break;
+      case OPCODE_SWC1:
+        body <<
+          "  store_word(" + use_regnames(rs) + " + " + hex_repr(simm16) +
+          ", " + fregnames[ft] + ");" << endl;
         break;
       default:
         body << "  fprintf(stderr, \"error: COP1: unknown opcode: "
