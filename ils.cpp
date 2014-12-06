@@ -9,12 +9,14 @@
 #include "qkfpu.h"
 using namespace std;
 
-static const char instnames[INSTRUCTION_NAME_MAX][8] = {
+static const char instnames[INSTRUCTION_NAME_MAX][11] = {
   "sll", "srl", "sra", "sllv", "srlv", "srav", "jr", "jalr", "addu", "subu",
   "and", "or", "xor", "nor", "slt", "sltu", "j", "jal", "beq", "bne",
-  "addiu", "slti", "sltiu", "andi", "ori", "xori", "lui", "lw", "sw",
-  "bc1f", "bc1t", "mtc1", "mfc1", "add.s", "sub.s", "mul.s", "div.s",
-  "sqrt.s", "mov.s", "cvt.s.w", "cvt.w.s", "c.eq.s", "c.olt.s", "c.ole.s"
+  "addiu", "slti", "sltiu", "andi", "ori", "xori", "lui",
+  "lw", "sw", "lwc1", "swc1", "bc1f", "bc1t", "mtc1", "mfc1",
+  "add.s", "sub.s", "mul.s", "div.s", "sqrt.s", "mov.s",
+  "cvt.s.w", "cvt.w.s", "c.eq.s", "c.olt.s", "c.ole.s",
+  "li (small)", "nop"
 };
 
 static const char regnames[32][5] = {
@@ -100,7 +102,11 @@ static int ils_run() {
           case FUNCT_SLL:
             set_reg = rd;
             set_reg_val = reg[rt] << sa;
-            ++instruction_counts[INSTRUCTION_NAME_SLL];
+            if(rd == 0) {
+              ++instruction_counts[INSTRUCTION_NAME_NOP];
+            } else {
+              ++instruction_counts[INSTRUCTION_NAME_SLL];
+            }
             break;
           case FUNCT_SRL:
             set_reg = rd;
@@ -151,8 +157,7 @@ static int ils_run() {
             branch_target = reg[rs]>>2;
             set_reg = REG_RA;
             set_reg_val = (uint32_t)(pc + 1) * 4;
-            // TODO
-            ++instruction_counts[INSTRUCTION_NAME_JR];
+            ++instruction_counts[INSTRUCTION_NAME_JALR];
             break;
           case FUNCT_ADDU:
             set_reg = rd;
@@ -230,7 +235,11 @@ static int ils_run() {
       case OPCODE_ADDIU:
         set_reg = rt;
         set_reg_val = reg[rs] + simm16;
-        ++instruction_counts[INSTRUCTION_NAME_ADDIU];
+        if(rs == 0) {
+          ++instruction_counts[INSTRUCTION_NAME_LI_SMALL];
+        } else {
+          ++instruction_counts[INSTRUCTION_NAME_ADDIU];
+        }
         break;
       case OPCODE_SLTI:
         set_reg = rt;
@@ -456,7 +465,11 @@ static int ils_run() {
           exit(1);
         }
         set_freg_val = set_reg_val;
-        ++instruction_counts[INSTRUCTION_NAME_LW];
+        if(opcode == OPCODE_LW) {
+          ++instruction_counts[INSTRUCTION_NAME_LW];
+        } else {
+          ++instruction_counts[INSTRUCTION_NAME_LWC1];
+        }
         break;
       }
       case OPCODE_SW:
@@ -486,7 +499,11 @@ static int ils_run() {
           fprintf(stderr, "error: LW: out of range: 0x%08x\n", addr);
           exit(1);
         }
-        ++instruction_counts[INSTRUCTION_NAME_SW];
+        if(opcode == OPCODE_SW) {
+          ++instruction_counts[INSTRUCTION_NAME_SW];
+        } else {
+          ++instruction_counts[INSTRUCTION_NAME_SWC1];
+        }
         break;
       }
       default:
