@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cinttypes>
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
@@ -1217,7 +1218,7 @@ static void cas_run() {
     // fprintf(stderr, "rob_top=%d, rob_bottom=%d\n", rob_top, rob_bottom);
     num_cycles++;
     if(num_cycles % 100000000 == 0) {
-      fprintf(stderr, "%13lldclks, %11lldinsts, %4.1fsecs\n",
+      fprintf(stderr, "%13" PRId64 "clks, %11" PRId64 "insts, %4.1fsecs\n",
           num_cycles, num_instructions, num_cycles/clk);
     }
   }
@@ -1243,9 +1244,11 @@ void cas_main() {
 
 static void show_statistics_and_exit(int status) {
   if(show_statistics) {
-    fprintf(stderr, "final result: %13lldclks, %11lldinsts, %4.1fsecs\n",
+    fprintf(stderr,
+        "final result: %13" PRId64 "clks, %11" PRId64 "insts, %4.1fsecs\n",
         num_cycles, num_instructions, num_cycles/clk);
-    fprintf(stderr, "branch misprediction: %lld / %lld (%.f%%)\n",
+    fprintf(stderr,
+            "branch misprediction: %" PRId64 " / %" PRId64 " (%.f%%)\n",
             num_missed_branches,
             num_committed_branches,
             num_missed_branches*100.0/num_committed_branches);
