@@ -8,6 +8,8 @@
 #include "qkfpu.h"
 using namespace std;
 
+static void show_statistics_and_exit(int status);
+
 const double clk = 66.666e6;
 const double baudrate = 460800.0;
 const int num_databits = 8;
@@ -27,7 +29,7 @@ static int send_count;
 inline uint32_t rs_recv_status() {
   if(recv_queue_top == recv_queue_bottom && recv_eof) {
     fprintf(stderr, "LW: End of File reached. Halt.\n");
-    exit(0);
+    show_statistics_and_exit(0);
   }
   return recv_queue_top != recv_queue_bottom;
 }
@@ -69,12 +71,12 @@ inline void rs_cycle() {
         return;
       } else {
         fprintf(stderr, "error: reading from input\n");
-        exit(1);
+        show_statistics_and_exit(1);
       }
     }
     if(((recv_queue_bottom+1)&1023) == recv_queue_top) {
       fprintf(stderr, "error: RS-232C receive queue overflow\n");
-      exit(1);
+      show_statistics_and_exit(1);
     }
     recv_queue[recv_queue_bottom] = ch;
     recv_queue_bottom++;
@@ -155,6 +157,7 @@ struct rob_val {
   bool busy;
   bool decode_success;
   bool isstore;
+  bool isbranch;
   int set_reg;
   value_tag val;
   value_tag branch_target;
@@ -257,7 +260,7 @@ inline uint32_t read_ram(uint32_t address) {
     if(show_commit_log) {
       fprintf(stderr, "memory error: reading: invalid address alignment\n");
     }
-    // exit(1);
+    // show_statistics_and_exit(1);
     return 0x55555555U;
   }
   if((address>>2) < (1U<<20)) {
@@ -269,13 +272,13 @@ inline uint32_t read_ram(uint32_t address) {
   if(show_commit_log) {
     fprintf(stderr, "error: read address out-of-bounds: 0x%08x\n", address);
   }
-  // exit(1);
+  // show_statistics_and_exit(1);
   return 0x55555555U;
 }
 inline void write_ram(uint32_t address, uint32_t data) {
   if(address&3) {
     fprintf(stderr, "memory error: writing: invalid address alignment\n");
-    exit(1);
+    show_statistics_and_exit(1);
   }
   if((address>>2) < (1U<<20)) {
     ram[address>>2] = data; return;
@@ -285,7 +288,7 @@ inline void write_ram(uint32_t address, uint32_t data) {
     return;
   }
   fprintf(stderr, "error: write address out-of-bounds: 0x%08x\n", address);
-  exit(1);
+  show_statistics_and_exit(1);
 }
 
 struct ls_entry1 {
@@ -440,9 +443,18 @@ inline value_tag get_reg(int r) {
 static uint32_t ra_stack[32];
 static int rasp;
 
+static uint64_t num_cycles;
+static uint64_t num_instructions;
+
+static uint64_t num_committed_branches;
+static uint64_t num_missed_branches;
+
+
 static void cas_run() {
-  uint64_t num_cycles = 0;
-  uint64_t num_instructions = 0;
+  num_cycles = 0;
+  num_instructions = 0;
+  num_committed_branches = 0;
+  num_missed_branches = 0;
 
   int pc = 0;
   uint32_t fetched_instruction = 0x55555555U;
@@ -505,7 +517,7 @@ static void cas_run() {
         return (int32_t)e.operands[1].value >> (e.operands[0].value&31);
       default:
         fprintf(stderr, "error: unknown ALU opcode %d\n", e.opcode);
-        exit(1);
+        show_statistics_and_exit(1);
         return 0;
     }
   };
@@ -527,7 +539,7 @@ static void cas_run() {
         return e.operands[0].value ^ 0x80000000U;
       default:
         fprintf(stderr, "error: unknown fp_adder opcode %d\n", e.opcode);
-        exit(1);
+        show_statistics_and_exit(1);
         return 0;
     }
   };
@@ -556,7 +568,7 @@ static void cas_run() {
           return fle(e.operands[0].value, e.operands[1].value);
       default:
         fprintf(stderr, "error: unknown fp_comparator opcode %d\n", e.opcode);
-        exit(1);
+        show_statistics_and_exit(1);
         return 0;
     }
   };
@@ -584,7 +596,7 @@ static void cas_run() {
           return ftoi(e.operands[0].value);
       default:
         fprintf(stderr, "error: unknown fp_others opcode %d\n", e.opcode);
-        exit(1);
+        show_statistics_and_exit(1);
         return 0;
     }
   };
@@ -608,7 +620,7 @@ static void cas_run() {
     int refetch_rasp = -1;
     if(rob[rob_top].busy && !rob[rob_top].decode_success) {
       fprintf(stderr, "error: tried to commit undecoded instruction\n");
-      exit(1);
+      show_statistics_and_exit(1);
     }
     bool rob_top_committable =
       rob[rob_top].busy &&
@@ -627,11 +639,28 @@ static void cas_run() {
         reg[rob[rob_top].set_reg].available =
           reg[rob[rob_top].set_reg].tag == rob_top;
       }
-      if(rob[rob_top].branch_target.value != rob[rob_top].predicted_branch) {
+      refetch =
+        rob[rob_top].branch_target.value != rob[rob_top].predicted_branch;
+      if(rob[rob_top].isbranch) {
+        num_committed_branches++;
+        if(refetch) num_missed_branches++;
         if(show_commit_log) {
-          fprintf(stderr, "refetch\n");
+          if(rob[rob_top].branch_target.value ==
+              (uint32_t)(rob[rob_top].pc+1)*4) {
+            fprintf(stderr, "pc=0x%08x: branch not taken\n",
+                (uint32_t)rob[rob_top].pc*4);
+          } else {
+            fprintf(stderr, "pc=0x%08x: branch taken to 0x%08x\n",
+                (uint32_t)rob[rob_top].pc*4,
+                rob[rob_top].branch_target.value);
+          }
+          if(refetch) {
+            fprintf(stderr, "pc=0x%08x: branch prediction missed\n",
+                (uint32_t)rob[rob_top].pc*4);
+          }
         }
-        refetch = true;
+      }
+      if(refetch) {
         if(rob[rob_top].branch_target.value&3) {
           fprintf(stderr, "error: unaligned branch target 0x%08x\n",
               rob[rob_top].branch_target.value);
@@ -700,6 +729,7 @@ static void cas_run() {
       dispatch_rob.busy = true;
       dispatch_rob.decode_success = true;
       dispatch_rob.isstore = false;
+      dispatch_rob.isbranch = false;
       dispatch_rob.val = from_tag(rob_bottom);
       dispatch_rob.branch_target =
         from_value((uint32_t)(decoded_instruction_pc+1)*4);
@@ -784,6 +814,7 @@ static void cas_run() {
               break;
             case FUNCT_JR:
             case FUNCT_JALR:
+              dispatch_rob.isbranch = true;
               dispatch_rob.val =
                 from_value((uint32_t)(decoded_instruction_pc+1)*4);
               dispatch_rob.branch_target = get_reg(rs);
@@ -812,6 +843,7 @@ static void cas_run() {
           break;
         case OPCODE_BEQ:
         case OPCODE_BNE:
+          dispatch_rob.isbranch = true;
           do_dispatch = do_dispatch && brancher.dispatchable();
           dispatch_rob.branch_target = from_tag(rob_bottom);
           if(do_dispatch) {
@@ -871,6 +903,7 @@ static void cas_run() {
         case OPCODE_COP1:
           switch(fmt) {
             case COP1_FMT_BRANCH:
+              dispatch_rob.isbranch = true;
               do_dispatch = do_dispatch && brancher.dispatchable();
               dispatch_rob.branch_target = from_tag(rob_bottom);
               if(do_dispatch) {
@@ -1131,7 +1164,7 @@ static void cas_run() {
       if(pc < 0 || pc >= (1<<15)) {
         fprintf(stderr, "error: program counter 0x%08x is out of range\n",
             pc*4);
-        exit(1);
+        show_statistics_and_exit(1);
       }
       fetched_instruction = ram[pc];
       fetched_instruction_pc = pc;
@@ -1198,7 +1231,7 @@ void cas_main() {
     size_t readsize = fread(chs,1,4,stdin);
     if(readsize<4) {
       fprintf(stderr, "input error during loading program\n");
-      exit(1);
+      show_statistics_and_exit(1);
     }
     uint32_t load_pword = (chs[0]<<24)|(chs[1]<<16)|(chs[2]<<8)|chs[3];
     if(load_pword == (uint32_t)-1) break;
@@ -1206,4 +1239,16 @@ void cas_main() {
   }
   for(int i = 0; i < 32; ++i) ram[load_pc++] = 0U;
   cas_run();
+}
+
+static void show_statistics_and_exit(int status) {
+  if(show_statistics) {
+    fprintf(stderr, "final result: %13lldclks, %11lldinsts, %4.1fsecs\n",
+        num_cycles, num_instructions, num_cycles/clk);
+    fprintf(stderr, "branch misprediction: %lld / %lld (%.f%%)\n",
+            num_missed_branches,
+            num_committed_branches,
+            num_missed_branches*100.0/num_committed_branches);
+  }
+  exit(status);
 }
