@@ -251,8 +251,11 @@ static uint32_t ram[1<<20];
 
 inline uint32_t read_ram(uint32_t address) {
   if(address&3) {
-    fprintf(stderr, "error: invalid address alignment\n");
-    exit(1);
+    if(show_commit_log) {
+      fprintf(stderr, "memory error: reading: invalid address alignment\n");
+    }
+    // exit(1);
+    return 0x55555555U;
   }
   if((address>>2) < (1U<<20)) {
     return ram[address>>2];
@@ -261,11 +264,12 @@ inline uint32_t read_ram(uint32_t address) {
   if(address == 0xFFFF0004U) return rs_recv_data();
   if(address == 0xFFFF0008U) return rs_send_status();
   fprintf(stderr, "error: read address out-of-bounds: 0x%08x\n", address);
-  exit(1);
+  // exit(1);
+  return 0x55555555U;
 }
 inline void write_ram(uint32_t address, uint32_t data) {
   if(address&3) {
-    fprintf(stderr, "error: invalid address alignment\n");
+    fprintf(stderr, "memory error: writing: invalid address alignment\n");
     exit(1);
   }
   if((address>>2) < (1U<<20)) {
@@ -666,10 +670,12 @@ static void cas_run() {
               }
               break;
             default:
-              fprintf(stderr,
-                  "decode error: unknown SPECIAL funct: %d\n", funct);
-              fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-                  decoded_instruction_pc*4, pword);
+              if(show_commit_log) {
+                fprintf(stderr,
+                    "decode error: unknown SPECIAL funct: %d\n", funct);
+                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                    decoded_instruction_pc*4, pword);
+              }
               dispatch_rob.decode_success = false;
           }
           break;
@@ -762,10 +768,12 @@ static void cas_run() {
           }
           break;
         default:
-          fprintf(stderr,
-              "decode error: unknown opcode: %d\n", opcode);
-          fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
-              decoded_instruction_pc*4, pword);
+          if(show_commit_log) {
+            fprintf(stderr,
+                "decode error: unknown opcode: %d\n", opcode);
+            fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                decoded_instruction_pc*4, pword);
+          }
           dispatch_rob.decode_success = false;
       }
       if(do_dispatch) {
