@@ -458,6 +458,22 @@ static uint64_t num_missed_jumpregisters;
 
 timeval start_tv;
 
+enum class StallReason : int {
+  NO_STALL = 0,
+  INSTRUCTION_UNAVAILABLE = 1,
+  ROB_UNAVAILABLE = 2,
+  MEM_UNAVAILABLE = 3,
+  BRANCHER_UNAVAILABLE = 4,
+  ALU_UNAVAILABLE = 5,
+  FADD_UNAVAILABLE = 6,
+  FMUL_UNAVAILABLE = 7,
+  FCMP_UNAVAILABLE = 8,
+  FOTHERS_UNAVAILABLE = 9,
+};
+const int NumStallReasons = 10;
+
+static uint64_t stall_reason_counts[NumStallReasons];
+
 
 static void cas_run() {
   num_cycles = 0;
@@ -467,6 +483,7 @@ static void cas_run() {
   num_committed_jumpregisters = 0;
   num_missed_jumpregisters = 0;
   gettimeofday(&start_tv, nullptr);
+  fill(stall_reason_counts,stall_reason_counts+NumStallReasons,0);
 
   int pc = 0;
   uint32_t fetched_instruction = 0x55555555U;
@@ -739,7 +756,9 @@ static void cas_run() {
       }
     }
     bool decode_stall = false;
+    StallReason stall_reason = StallReason::NO_STALL;
     if(refetch) {
+      stall_reason = StallReason::INSTRUCTION_UNAVAILABLE;
     } else if(decoded_instruction_available) {
       // dispatch
       uint32_t pword = decoded_instruction;
@@ -808,6 +827,7 @@ static void cas_run() {
             case FUNCT_SLT:
             case FUNCT_SLTU:
               dispatch_rob.set_reg = rd;
+              stall_reason = StallReason::ALU_UNAVAILABLE;
               do_dispatch = do_dispatch && alu.dispatchable();
               if(do_dispatch) {
                 dispatch_alu.busy = true;
@@ -876,6 +896,7 @@ static void cas_run() {
         case OPCODE_BEQ:
         case OPCODE_BNE:
           dispatch_rob.btype = branch_type::BRANCH;
+          stall_reason = StallReason::BRANCHER_UNAVAILABLE;
           do_dispatch = do_dispatch && brancher.dispatchable();
           dispatch_rob.branch_target = from_tag(rob_bottom);
           if(do_dispatch) {
@@ -901,6 +922,7 @@ static void cas_run() {
         case OPCODE_XORI:
         case OPCODE_LUI:
           dispatch_rob.set_reg = rt;
+          stall_reason = StallReason::ALU_UNAVAILABLE;
           do_dispatch = do_dispatch && alu.dispatchable();
           if(do_dispatch) {
             dispatch_alu.busy = true;
@@ -936,6 +958,7 @@ static void cas_run() {
           switch(fmt) {
             case COP1_FMT_BRANCH:
               dispatch_rob.btype = branch_type::BRANCH;
+              stall_reason = StallReason::BRANCHER_UNAVAILABLE;
               do_dispatch = do_dispatch && brancher.dispatchable();
               dispatch_rob.branch_target = from_tag(rob_bottom);
               if(do_dispatch) {
@@ -968,6 +991,7 @@ static void cas_run() {
               } else {
                 dispatch_rob.set_reg = fs;
               }
+              stall_reason = StallReason::FADD_UNAVAILABLE;
               do_dispatch = do_dispatch && fp_adder.dispatchable();
               if(do_dispatch) {
                 dispatch_fadd.busy = true;
@@ -986,6 +1010,7 @@ static void cas_run() {
                 case COP1_FUNCT_SUB:
                 case COP1_FUNCT_MOV:
                   dispatch_rob.set_reg = fd;
+                  stall_reason = StallReason::FADD_UNAVAILABLE;
                   do_dispatch = do_dispatch && fp_adder.dispatchable();
                   if(do_dispatch) {
                     dispatch_fadd.busy = true;
@@ -1007,6 +1032,7 @@ static void cas_run() {
                   break;
                 case COP1_FUNCT_MUL:
                   dispatch_rob.set_reg = fd;
+                  stall_reason = StallReason::FMUL_UNAVAILABLE;
                   do_dispatch = do_dispatch && fp_multiplier.dispatchable();
                   if(do_dispatch) {
                     dispatch_fmul.busy = true;
@@ -1019,6 +1045,7 @@ static void cas_run() {
                 case COP1_FUNCT_SQRT:
                 case COP1_FUNCT_CVT_W:
                   dispatch_rob.set_reg = fd;
+                  stall_reason = StallReason::FOTHERS_UNAVAILABLE;
                   do_dispatch = do_dispatch && fp_others.dispatchable();
                   if(do_dispatch) {
                     dispatch_fothers.busy = true;
@@ -1041,6 +1068,7 @@ static void cas_run() {
                 case COP1_FUNCT_C_OLT:
                 case COP1_FUNCT_C_OLE:
                   dispatch_rob.set_reg = REG_CC0;
+                  stall_reason = StallReason::FCMP_UNAVAILABLE;
                   do_dispatch = do_dispatch && fp_comparator.dispatchable();
                   if(do_dispatch) {
                     dispatch_fcmp.busy = true;
@@ -1069,6 +1097,7 @@ static void cas_run() {
               switch(funct) {
                 case COP1_FUNCT_CVT_S:
                   dispatch_rob.set_reg = fd;
+                  stall_reason = StallReason::FOTHERS_UNAVAILABLE;
                   do_dispatch = do_dispatch && fp_others.dispatchable();
                   if(do_dispatch) {
                     dispatch_fothers.busy = true;
@@ -1104,6 +1133,7 @@ static void cas_run() {
           } else {
             dispatch_rob.set_reg = ft;
           }
+          stall_reason = StallReason::MEM_UNAVAILABLE;
           do_dispatch = do_dispatch && lsbuffer.dispatchable();
           if(do_dispatch) {
             dispatch_lsbuffer.busy = true;
@@ -1120,6 +1150,7 @@ static void cas_run() {
           } else {
             dispatch_rob.val = get_reg(ft);
           }
+          stall_reason = StallReason::MEM_UNAVAILABLE;
           do_dispatch = do_dispatch && lsbuffer.dispatchable();
           if(do_dispatch) {
             dispatch_lsbuffer.busy = true;
@@ -1138,6 +1169,7 @@ static void cas_run() {
           dispatch_rob.decode_success = false;
       }
       if(do_dispatch) {
+        stall_reason = StallReason::NO_STALL;
         // fprintf(stderr, "dispatch: pc=0x%08x, opcode=%d\n", decoded_instruction_pc, opcode);
         if(dispatch_rob.set_reg) {
           reg[dispatch_rob.set_reg].available = 0;
@@ -1146,6 +1178,9 @@ static void cas_run() {
         rob[rob_bottom++] = dispatch_rob;
         rob_bottom &= NUM_TAGS-1;
       } else {
+        if(!rob[rob_bottom].busy) {
+          stall_reason = StallReason::ROB_UNAVAILABLE;
+        }
         decode_stall = true;
       }
       if(dispatch_lsbuffer.busy) {
@@ -1169,9 +1204,10 @@ static void cas_run() {
       if(dispatch_fothers.busy) {
         fp_others.dispatch(dispatch_fothers);
       }
-    } else if(decoded_instruction_available) {
-      decode_stall = true;
+    } else {
+      stall_reason = StallReason::INSTRUCTION_UNAVAILABLE;
     }
+    stall_reason_counts[static_cast<int>(stall_reason)]++;
     bool fetch_stall = false;
     if(refetch) {
       decoded_instruction_available = false;
@@ -1306,6 +1342,43 @@ static void do_show_statistics() {
           num_missed_jumpregisters,
           num_committed_jumpregisters,
           num_missed_jumpregisters*100.0/num_committed_jumpregisters);
+  fprintf(stderr, " stall because:\n");
+  fprintf(stderr,
+      " %20" PRId64 ": Instruction unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::INSTRUCTION_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": ROB unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::ROB_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": Load/Store Buffer unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::MEM_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": Brancher unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::BRANCHER_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": ALU unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::ALU_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": FP Adder unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::FADD_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": FP Multiplier unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::FMUL_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": FP Comparator unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::FCMP_UNAVAILABLE)]);
+  fprintf(stderr,
+      " %20" PRId64 ": FP Div/Sqrt/Ftoi/Itof unavailable\n",
+      stall_reason_counts[
+        static_cast<int>(StallReason::FOTHERS_UNAVAILABLE)]);
 }
 
 static void show_statistics_and_exit(int status) {
