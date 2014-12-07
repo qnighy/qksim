@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
+#include <sys/time.h>
 #include "consts.h"
 #include "options.h"
 #include "cas.h"
@@ -450,12 +451,15 @@ static uint64_t num_instructions;
 static uint64_t num_committed_branches;
 static uint64_t num_missed_branches;
 
+timeval start_tv;
+
 
 static void cas_run() {
   num_cycles = 0;
   num_instructions = 0;
   num_committed_branches = 0;
   num_missed_branches = 0;
+  gettimeofday(&start_tv, nullptr);
 
   int pc = 0;
   uint32_t fetched_instruction = 0x55555555U;
@@ -1218,8 +1222,14 @@ static void cas_run() {
     // fprintf(stderr, "rob_top=%d, rob_bottom=%d\n", rob_top, rob_bottom);
     num_cycles++;
     if(num_cycles % 100000000 == 0) {
-      fprintf(stderr, "%13" PRId64 "clks, %11" PRId64 "insts, %4.1fsecs\n",
-          num_cycles, num_instructions, num_cycles/clk);
+      timeval current_tv;
+      gettimeofday(&current_tv, nullptr);
+      fprintf(stderr,
+          "%13" PRId64 "clks, %11" PRId64 "insts, "
+          "%5.1fsecs (sim), %6.1fsecs (real)\n",
+          num_cycles, num_instructions, num_cycles/clk,
+          (current_tv.tv_sec-start_tv.tv_sec)+
+          (current_tv.tv_usec-start_tv.tv_usec)*0.000001);
     }
   }
 }
@@ -1244,9 +1254,14 @@ void cas_main() {
 
 static void show_statistics_and_exit(int status) {
   if(show_statistics) {
+    timeval current_tv;
+    gettimeofday(&current_tv, nullptr);
     fprintf(stderr,
-        "final result: %13" PRId64 "clks, %11" PRId64 "insts, %4.1fsecs\n",
-        num_cycles, num_instructions, num_cycles/clk);
+        "final result: %13" PRId64 "clks, %11" PRId64 "insts, "
+        "%5.1fsecs (sim), %6.1fsecs (real)\n",
+        num_cycles, num_instructions, num_cycles/clk,
+        (current_tv.tv_sec-start_tv.tv_sec)+
+        (current_tv.tv_usec-start_tv.tv_usec)*0.000001);
     fprintf(stderr,
             "branch misprediction: %" PRId64 " / %" PRId64 " (%.f%%)\n",
             num_missed_branches,
