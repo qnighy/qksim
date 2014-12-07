@@ -104,11 +104,13 @@ inline void rs_cycle() {
 #define ALU_OP_SRL  016
 #define ALU_OP_SRA  017
 
+#define REG_CC0 64
+
 const int TAG_LENGTH = 5;
 const int NUM_TAGS = (1<<TAG_LENGTH);
 const int REG_LENGTH = 7;
 const int NUM_REGS = (1<<REG_LENGTH);
-const int CDB_SIZE = 3;
+const int CDB_SIZE = 7;
 
 struct value_tag {
   bool available;
@@ -453,6 +455,10 @@ static void cas_run() {
   load_store_buffer<2, 2> lsbuffer;
   reservation_station<1, 2, 4> brancher;
   reservation_station<1, 2, 2> alu;
+  reservation_station<2, 2, 2> fp_adder;
+  reservation_station<2, 2, 2> fp_multiplier;
+  reservation_station<1, 2, 2> fp_comparator;
+  reservation_station<7, 2, 2> fp_others;
   brancher.fun = [](const rs_entry<4> &e) -> uint32_t {
     if((e.opcode&1) ^ (e.operands[0].value == e.operands[1].value)) {
       return e.operands[3].value;
@@ -490,9 +496,92 @@ static void cas_run() {
         return 0;
     }
   };
+  fp_adder.fun = [](const rs_entry<2> &e) -> uint32_t {
+    switch(e.opcode) {
+      case 0:
+        if(use_native_fp)
+          return native_fadd(e.operands[0].value, e.operands[1].value);
+        else
+          return fadd(e.operands[0].value, e.operands[1].value);
+      case 1:
+        if(use_native_fp)
+          return native_fsub(e.operands[0].value, e.operands[1].value);
+        else
+          return fsub(e.operands[0].value, e.operands[1].value);
+      case 2:
+        return e.operands[0].value;
+      case 3:
+        return e.operands[0].value ^ 0x80000000U;
+      default:
+        fprintf(stderr, "error: unknown fp_adder opcode %d\n", e.opcode);
+        exit(1);
+        return 0;
+    }
+  };
+  fp_multiplier.fun = [](const rs_entry<2> &e) -> uint32_t {
+    if(use_native_fp)
+      return native_fmul(e.operands[0].value, e.operands[1].value);
+    else
+      return fmul(e.operands[0].value, e.operands[1].value);
+  };
+  fp_comparator.fun = [](const rs_entry<2> &e) -> uint32_t {
+    switch(e.opcode) {
+      case 2:
+        if(use_native_fp)
+          return native_feq(e.operands[0].value, e.operands[1].value);
+        else
+          return feq(e.operands[0].value, e.operands[1].value);
+      case 4:
+        if(use_native_fp)
+          return native_flt(e.operands[0].value, e.operands[1].value);
+        else
+          return flt(e.operands[0].value, e.operands[1].value);
+      case 6:
+        if(use_native_fp)
+          return native_fle(e.operands[0].value, e.operands[1].value);
+        else
+          return fle(e.operands[0].value, e.operands[1].value);
+      default:
+        fprintf(stderr, "error: unknown fp_comparator opcode %d\n", e.opcode);
+        exit(1);
+        return 0;
+    }
+  };
+  fp_others.fun = [](const rs_entry<2> &e) -> uint32_t {
+    switch(e.opcode) {
+      case 0:
+        if(use_native_fp)
+          return native_fdiv(e.operands[0].value, e.operands[1].value);
+        else
+          return fdiv(e.operands[0].value, e.operands[1].value);
+      case 1:
+        if(use_native_fp)
+          return native_fsqrt(e.operands[0].value);
+        else
+          return fsqrt(e.operands[0].value);
+      case 2:
+        if(use_native_fp)
+          return native_itof(e.operands[0].value);
+        else
+          return itof(e.operands[0].value);
+      case 3:
+        if(use_native_fp)
+          return native_ftoi(e.operands[0].value);
+        else
+          return ftoi(e.operands[0].value);
+      default:
+        fprintf(stderr, "error: unknown fp_others opcode %d\n", e.opcode);
+        exit(1);
+        return 0;
+    }
+  };
   lsbuffer.reset();
   brancher.reset();
   alu.reset();
+  fp_adder.reset();
+  fp_multiplier.reset();
+  fp_comparator.reset();
+  fp_others.reset();
 
   rob_top = 0;
   rob_bottom = 0;
@@ -565,6 +654,10 @@ static void cas_run() {
       lsbuffer.reset();
       brancher.reset();
       alu.reset();
+      fp_adder.reset();
+      fp_multiplier.reset();
+      fp_comparator.reset();
+      fp_others.reset();
       for(int i = 0; i < NUM_REGS; ++i) {
         reg[i].rollback();
       }
@@ -599,14 +692,26 @@ static void cas_run() {
       dispatch_rob.set_reg = 0;
       bool do_dispatch = !rob[rob_bottom].busy;
       ls_entry1 dispatch_lsbuffer;
-      rs_entry<2> dispatch_alu;
       rs_entry<4> dispatch_brancher;
+      rs_entry<2> dispatch_alu;
+      rs_entry<2> dispatch_fadd;
+      rs_entry<2> dispatch_fmul;
+      rs_entry<2> dispatch_fcmp;
+      rs_entry<2> dispatch_fothers;
       dispatch_lsbuffer.busy = false;
       dispatch_lsbuffer.tag = rob_bottom;
-      dispatch_alu.busy = false;
-      dispatch_alu.tag = rob_bottom;
       dispatch_brancher.busy = false;
       dispatch_brancher.tag = rob_bottom;
+      dispatch_alu.busy = false;
+      dispatch_alu.tag = rob_bottom;
+      dispatch_fadd.busy = false;
+      dispatch_fadd.tag = rob_bottom;
+      dispatch_fmul.busy = false;
+      dispatch_fmul.tag = rob_bottom;
+      dispatch_fcmp.busy = false;
+      dispatch_fcmp.tag = rob_bottom;
+      dispatch_fothers.busy = false;
+      dispatch_fothers.tag = rob_bottom;
       switch(opcode) {
         case OPCODE_SPECIAL:
           switch(funct) {
@@ -746,8 +851,177 @@ static void cas_run() {
             }
           }
           break;
+        case OPCODE_COP1:
+          switch(fmt) {
+            case COP1_FMT_BRANCH:
+              do_dispatch = do_dispatch && brancher.dispatchable();
+              dispatch_rob.branch_target = from_tag(rob_bottom);
+              if(do_dispatch) {
+                dispatch_brancher.busy = true;
+                if(rt == 0) {
+                  dispatch_brancher.opcode = 0;
+                } else if(rt == 1) {
+                  dispatch_brancher.opcode = 1;
+                } else {
+                  if(show_commit_log) {
+                    fprintf(stderr,
+                        "decode error: unknown BC1 condition: %d\n", rt);
+                    fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                        decoded_instruction_pc*4, pword);
+                  }
+                  dispatch_rob.decode_success = false;
+                }
+                dispatch_brancher.operands[0] = get_reg(REG_CC0);
+                dispatch_brancher.operands[1] = from_value(0);
+                dispatch_brancher.operands[2] =
+                  from_value((uint32_t)(decoded_instruction_pc+1)*4);
+                dispatch_brancher.operands[3] =
+                  from_value((uint32_t)(decoded_instruction_pc+1+simm16)*4);
+              }
+              break;
+            case COP1_FMT_MFC1:
+            case COP1_FMT_MTC1:
+              if(fmt == COP1_FMT_MFC1) {
+                dispatch_rob.set_reg = rt;
+              } else {
+                dispatch_rob.set_reg = fs;
+              }
+              do_dispatch = do_dispatch && fp_adder.dispatchable();
+              if(do_dispatch) {
+                dispatch_fadd.busy = true;
+                dispatch_fadd.opcode = 2;
+                if(fmt == COP1_FMT_MFC1) {
+                  dispatch_fadd.operands[0] = get_reg(fs);
+                } else {
+                  dispatch_fadd.operands[0] = get_reg(rt);
+                }
+                dispatch_fadd.operands[1] = from_value(0);
+              }
+              break;
+            case COP1_FMT_S:
+              switch(funct) {
+                case COP1_FUNCT_ADD:
+                case COP1_FUNCT_SUB:
+                case COP1_FUNCT_MOV:
+                  dispatch_rob.set_reg = fd;
+                  do_dispatch = do_dispatch && fp_adder.dispatchable();
+                  if(do_dispatch) {
+                    dispatch_fadd.busy = true;
+                    if(funct == COP1_FUNCT_ADD) {
+                      dispatch_fadd.opcode = 0;
+                    } else if(funct == COP1_FUNCT_SUB) {
+                      dispatch_fadd.opcode = 1;
+                    } else if(funct == COP1_FUNCT_MOV) {
+                      dispatch_fadd.opcode = 2;
+                    }
+                    dispatch_fadd.operands[0] = get_reg(fs);
+                    if(funct == COP1_FUNCT_ADD ||
+                       funct == COP1_FUNCT_SUB) {
+                      dispatch_fadd.operands[1] = get_reg(ft);
+                    } else {
+                      dispatch_fadd.operands[1] = from_value(0);
+                    }
+                  }
+                  break;
+                case COP1_FUNCT_MUL:
+                  dispatch_rob.set_reg = fd;
+                  do_dispatch = do_dispatch && fp_multiplier.dispatchable();
+                  if(do_dispatch) {
+                    dispatch_fmul.busy = true;
+                    dispatch_fmul.opcode = 0;
+                    dispatch_fmul.operands[0] = get_reg(fs);
+                    dispatch_fmul.operands[1] = get_reg(ft);
+                  }
+                  break;
+                case COP1_FUNCT_DIV:
+                case COP1_FUNCT_SQRT:
+                case COP1_FUNCT_CVT_W:
+                  dispatch_rob.set_reg = fd;
+                  do_dispatch = do_dispatch && fp_others.dispatchable();
+                  if(do_dispatch) {
+                    dispatch_fothers.busy = true;
+                    if(funct == COP1_FUNCT_DIV) {
+                      dispatch_fothers.opcode = 0;
+                    } else if(funct == COP1_FUNCT_SQRT) {
+                      dispatch_fothers.opcode = 1;
+                    } else if(funct == COP1_FUNCT_CVT_W) {
+                      dispatch_fothers.opcode = 3;
+                    }
+                    dispatch_fothers.operands[0] = get_reg(fs);
+                    if(funct == COP1_FUNCT_DIV) {
+                      dispatch_fothers.operands[1] = get_reg(ft);
+                    } else {
+                      dispatch_fothers.operands[1] = from_value(0);
+                    }
+                  }
+                  break;
+                case COP1_FUNCT_C_EQ:
+                case COP1_FUNCT_C_OLT:
+                case COP1_FUNCT_C_OLE:
+                  dispatch_rob.set_reg = REG_CC0;
+                  do_dispatch = do_dispatch && fp_comparator.dispatchable();
+                  if(do_dispatch) {
+                    dispatch_fcmp.busy = true;
+                    if(funct == COP1_FUNCT_C_EQ) {
+                      dispatch_fcmp.opcode = 2;
+                    } else if(funct == COP1_FUNCT_C_OLT) {
+                      dispatch_fcmp.opcode = 4;
+                    } else if(funct == COP1_FUNCT_C_OLE) {
+                      dispatch_fcmp.opcode = 6;
+                    }
+                    dispatch_fcmp.operands[0] = get_reg(fs);
+                    dispatch_fcmp.operands[1] = get_reg(ft);
+                  }
+                  break;
+                default:
+                  if(show_commit_log) {
+                    fprintf(stderr,
+                        "decode error: unknown COP1.S funct: %d\n", funct);
+                    fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                        decoded_instruction_pc*4, pword);
+                  }
+                  dispatch_rob.decode_success = false;
+              }
+              break;
+            case COP1_FMT_W:
+              switch(funct) {
+                case COP1_FUNCT_CVT_S:
+                  dispatch_rob.set_reg = fd;
+                  do_dispatch = do_dispatch && fp_others.dispatchable();
+                  if(do_dispatch) {
+                    dispatch_fothers.busy = true;
+                    dispatch_fothers.opcode = 2;
+                    dispatch_fothers.operands[0] = get_reg(fs);
+                    dispatch_fothers.operands[1] = from_value(0);
+                  }
+                  break;
+                default:
+                  if(show_commit_log) {
+                    fprintf(stderr,
+                        "decode error: unknown COP1.W funct: %d\n", funct);
+                    fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                        decoded_instruction_pc*4, pword);
+                  }
+                  dispatch_rob.decode_success = false;
+              }
+              break;
+            default:
+              if(show_commit_log) {
+                fprintf(stderr,
+                    "decode error: unknown COP1 fmt: %d\n", fmt);
+                fprintf(stderr, "pc = 0x%08x, pword = 0x%08x\n",
+                    decoded_instruction_pc*4, pword);
+              }
+              dispatch_rob.decode_success = false;
+          }
+          break;
         case OPCODE_LW:
-          dispatch_rob.set_reg = rt;
+        case OPCODE_LWC1:
+          if(opcode == OPCODE_LW) {
+            dispatch_rob.set_reg = rt;
+          } else {
+            dispatch_rob.set_reg = ft;
+          }
           do_dispatch = do_dispatch && lsbuffer.dispatchable();
           if(do_dispatch) {
             dispatch_lsbuffer.busy = true;
@@ -757,8 +1031,13 @@ static void cas_run() {
           }
           break;
         case OPCODE_SW:
+        case OPCODE_SWC1:
           dispatch_rob.isstore = true;
-          dispatch_rob.val = get_reg(rt);
+          if(opcode == OPCODE_SW) {
+            dispatch_rob.val = get_reg(rt);
+          } else {
+            dispatch_rob.val = get_reg(ft);
+          }
           do_dispatch = do_dispatch && lsbuffer.dispatchable();
           if(do_dispatch) {
             dispatch_lsbuffer.busy = true;
@@ -790,11 +1069,23 @@ static void cas_run() {
       if(dispatch_lsbuffer.busy) {
         lsbuffer.dispatch(dispatch_lsbuffer);
       }
+      if(dispatch_brancher.busy) {
+        brancher.dispatch(dispatch_brancher);
+      }
       if(dispatch_alu.busy) {
         alu.dispatch(dispatch_alu);
       }
-      if(dispatch_brancher.busy) {
-        brancher.dispatch(dispatch_brancher);
+      if(dispatch_fadd.busy) {
+        fp_adder.dispatch(dispatch_fadd);
+      }
+      if(dispatch_fmul.busy) {
+        fp_multiplier.dispatch(dispatch_fmul);
+      }
+      if(dispatch_fcmp.busy) {
+        fp_comparator.dispatch(dispatch_fcmp);
+      }
+      if(dispatch_fothers.busy) {
+        fp_others.dispatch(dispatch_fothers);
       }
     } else if(decoded_instruction_available) {
       decode_stall = true;
@@ -833,9 +1124,17 @@ static void cas_run() {
                       last_rob_val);
     brancher.do_issue();
     alu.do_issue();
+    fp_adder.do_issue();
+    fp_multiplier.do_issue();
+    fp_comparator.do_issue();
+    fp_others.do_issue();
     cdb[0] = lsbuffer.calculation_pipeline[0];
     cdb[1] = brancher.calculation_pipeline[0];
     cdb[2] = alu.calculation_pipeline[0];
+    cdb[3] = fp_adder.calculation_pipeline[0];
+    cdb[4] = fp_multiplier.calculation_pipeline[0];
+    cdb[5] = fp_comparator.calculation_pipeline[0];
+    cdb[6] = fp_others.calculation_pipeline[0];
     // fprintf(stderr, "rob_top=%d, rob_bottom=%d\n", rob_top, rob_bottom);
   }
 }
