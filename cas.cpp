@@ -1178,7 +1178,7 @@ static void cas_run() {
         rob[rob_bottom++] = dispatch_rob;
         rob_bottom &= NUM_TAGS-1;
       } else {
-        if(!rob[rob_bottom].busy) {
+        if(rob[rob_bottom].busy) {
           stall_reason = StallReason::ROB_UNAVAILABLE;
         }
         decode_stall = true;
