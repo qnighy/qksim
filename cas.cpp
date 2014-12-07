@@ -441,6 +441,9 @@ static uint32_t ra_stack[32];
 static int rasp;
 
 static void cas_run() {
+  uint64_t num_cycles = 0;
+  uint64_t num_instructions = 0;
+
   int pc = 0;
   uint32_t fetched_instruction = 0x55555555U;
   uint32_t decoded_instruction = 0x55555555U;
@@ -639,6 +642,7 @@ static void cas_run() {
       rob[rob_top].busy = false;
       rob_top++;
       rob_top &= NUM_TAGS-1;
+      num_instructions++;
     } else {
       // TODO: commit stall
       // fprintf(stderr, "%d, %d, %d, %d, %d, %d\n",
@@ -1178,6 +1182,11 @@ static void cas_run() {
     cdb[5] = fp_comparator.calculation_pipeline[0];
     cdb[6] = fp_others.calculation_pipeline[0];
     // fprintf(stderr, "rob_top=%d, rob_bottom=%d\n", rob_top, rob_bottom);
+    num_cycles++;
+    if(num_cycles % 100000000 == 0) {
+      fprintf(stderr, "%13lldclks, %11lldinsts, %4.1fsecs\n",
+          num_cycles, num_instructions, num_cycles/clk);
+    }
   }
 }
 
