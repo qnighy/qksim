@@ -265,7 +265,9 @@ inline uint32_t read_ram(uint32_t address) {
   if(address == 0xFFFF0000U) return rs_recv_status();
   if(address == 0xFFFF0004U) return rs_recv_data();
   if(address == 0xFFFF0008U) return rs_send_status();
-  fprintf(stderr, "error: read address out-of-bounds: 0x%08x\n", address);
+  if(show_commit_log) {
+    fprintf(stderr, "error: read address out-of-bounds: 0x%08x\n", address);
+  }
   // exit(1);
   return 0x55555555U;
 }
@@ -679,7 +681,7 @@ static void cas_run() {
       int fd = sa|0x20;
       uint32_t uimm16 = (uint16_t)pword;
       uint32_t simm16 = (int16_t)pword;
-      int jt = (pc>>26<<26)|(pword&((1U<<26)-1));
+      int jt = (decoded_instruction_pc>>26<<26)|(pword&((1U<<26)-1));
       rob_val dispatch_rob;
       dispatch_rob.busy = true;
       dispatch_rob.decode_success = true;
