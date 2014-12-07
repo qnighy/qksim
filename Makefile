@@ -1,9 +1,9 @@
 #!/usr/bin/make -f
 
 CC = gcc
-CFLAGS = -std=c99 -O2 -Wall -Wextra -g
+CFLAGS = -std=c99 -O3 -Wall -Wextra -g
 CXX = g++
-CXXFLAGS = -std=c++11 -O2 -Wall -Wextra -g
+CXXFLAGS = -std=c++11 -O3 -Wall -Wextra -g
 LDLIBS = \
 	-lboost_program_options
 
