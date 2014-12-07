@@ -6,6 +6,7 @@
 #include "options.h"
 #include "ils.h"
 #include "jit.h"
+#include "cas.h"
 using namespace std;
 using namespace boost::program_options;
 
@@ -14,7 +15,7 @@ int main(int argc, char *argv[]) {
 
   options1.add_options()
       ("sim,s", value<string>()->default_value("ils"),
-                "which implementation to use (ils,jit)")
+                "which implementation to use (ils,jit,cas)")
       ("native-fp,n", "use native floating-point unit")
       ("show-commit-log,c", "show commit log")
       ("show-statistics,t", "show statistics")
@@ -34,6 +35,8 @@ int main(int argc, char *argv[]) {
       ils_main();
     } else if(sim_impl == "jit") {
       jit_main();
+    } else if(sim_impl == "cas") {
+      cas_main();
     } else {
       cerr << "Unknown implementation name : " << sim_impl << endl;
       exit(1);

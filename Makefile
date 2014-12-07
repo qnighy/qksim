@@ -15,7 +15,7 @@ FPU_SOURCES = \
 
 SOURCES = \
 	  native_fpu.cpp \
-	  options.cpp ils.cpp jit.cpp main.cpp
+	  options.cpp ils.cpp jit.cpp cas.cpp main.cpp
 
 all: $(EXEC)
 
