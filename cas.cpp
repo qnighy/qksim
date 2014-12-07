@@ -10,6 +10,7 @@
 #include "qkfpu.h"
 using namespace std;
 
+static void do_show_statistics();
 static void show_statistics_and_exit(int status);
 
 const double clk = 66.666e6;
@@ -1218,14 +1219,7 @@ static void cas_run() {
     // fprintf(stderr, "rob_top=%d, rob_bottom=%d\n", rob_top, rob_bottom);
     num_cycles++;
     if(num_cycles % 100000000 == 0) {
-      timeval current_tv;
-      gettimeofday(&current_tv, nullptr);
-      fprintf(stderr,
-          "%13" PRId64 "clks, %11" PRId64 "insts, "
-          "%5.1fsecs (sim), %6.1fsecs (real)\n",
-          num_cycles, num_instructions, num_cycles/clk,
-          (current_tv.tv_sec-start_tv.tv_sec)+
-          (current_tv.tv_usec-start_tv.tv_usec)*0.000001);
+      do_show_statistics();
     }
   }
 }
@@ -1248,21 +1242,26 @@ void cas_main() {
   cas_run();
 }
 
+static void do_show_statistics() {
+  timeval current_tv;
+  gettimeofday(&current_tv, nullptr);
+  fprintf(stderr,
+      "%13" PRId64 "clks, %11" PRId64 "insts, "
+      "%5.1fsecs (sim), %6.1fsecs (real)\n",
+      num_cycles, num_instructions, num_cycles/clk,
+      (current_tv.tv_sec-start_tv.tv_sec)+
+      (current_tv.tv_usec-start_tv.tv_usec)*0.000001);
+  fprintf(stderr,
+          "branch misprediction: %" PRId64 " / %" PRId64 " (%.f%%)\n",
+          num_missed_branches,
+          num_committed_branches,
+          num_missed_branches*100.0/num_committed_branches);
+}
+
 static void show_statistics_and_exit(int status) {
   if(show_statistics) {
-    timeval current_tv;
-    gettimeofday(&current_tv, nullptr);
-    fprintf(stderr,
-        "final result: %13" PRId64 "clks, %11" PRId64 "insts, "
-        "%5.1fsecs (sim), %6.1fsecs (real)\n",
-        num_cycles, num_instructions, num_cycles/clk,
-        (current_tv.tv_sec-start_tv.tv_sec)+
-        (current_tv.tv_usec-start_tv.tv_usec)*0.000001);
-    fprintf(stderr,
-            "branch misprediction: %" PRId64 " / %" PRId64 " (%.f%%)\n",
-            num_missed_branches,
-            num_committed_branches,
-            num_missed_branches*100.0/num_committed_branches);
+    fprintf(stderr, "final result:\n");
+    do_show_statistics();
   }
   exit(status);
 }
