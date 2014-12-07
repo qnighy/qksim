@@ -160,6 +160,7 @@ struct rob_val {
   value_tag branch_target;
   uint32_t predicted_branch;
   int pc;
+  int rasp;
 };
 
 static value_tag cdb[CDB_SIZE];
@@ -436,6 +437,9 @@ inline value_tag get_reg(int r) {
   return snoop(rv);
 }
 
+static uint32_t ra_stack[32];
+static int rasp;
+
 static void cas_run() {
   int pc = 0;
   uint32_t fetched_instruction = 0x55555555U;
@@ -446,6 +450,10 @@ static void cas_run() {
   uint32_t decoded_instruction_predicted_branch = 0x55555555U;
   bool fetched_instruction_available = false;
   bool decoded_instruction_available = false;
+  int fetched_instruction_rasp = -1;
+  int decoded_instruction_rasp = -1;
+
+  rasp = 0;
 
   reset_cdb();
   for(int i = 0; i < NUM_REGS; ++i) {
@@ -594,6 +602,7 @@ static void cas_run() {
     uint32_t last_rob_val = rob[rob_top].val.value;
     bool refetch = false;
     int refetch_address = -1;
+    int refetch_rasp = -1;
     if(rob[rob_top].busy && !rob[rob_top].decode_success) {
       fprintf(stderr, "error: tried to commit undecoded instruction\n");
       exit(1);
@@ -625,6 +634,7 @@ static void cas_run() {
               rob[rob_top].branch_target.value);
         }
         refetch_address = rob[rob_top].branch_target.value>>2;
+        refetch_rasp = rob[rob_top].rasp;
       }
       rob[rob_top].busy = false;
       rob_top++;
@@ -691,6 +701,7 @@ static void cas_run() {
         from_value((uint32_t)(decoded_instruction_pc+1)*4);
       dispatch_rob.predicted_branch = decoded_instruction_predicted_branch;
       dispatch_rob.pc = decoded_instruction_pc;
+      dispatch_rob.rasp = decoded_instruction_rasp;
       dispatch_rob.set_reg = 0;
       bool do_dispatch = !rob[rob_bottom].busy;
       ls_entry1 dispatch_lsbuffer;
@@ -1103,12 +1114,14 @@ static void cas_run() {
       decoded_instruction_predicted_branch =
         fetched_instruction_predicted_branch;
       decoded_instruction_available = true;
+      decoded_instruction_rasp = fetched_instruction_rasp;
     } else if(fetched_instruction_available) {
       fetch_stall = true;
     }
     if(refetch) {
       fetched_instruction_available = false;
       pc = refetch_address;
+      rasp = refetch_rasp;
     } else if(!fetch_stall) {
       // fetch
       if(pc < 0 || pc >= (1<<15)) {
@@ -1118,9 +1131,36 @@ static void cas_run() {
       }
       fetched_instruction = ram[pc];
       fetched_instruction_pc = pc;
-      fetched_instruction_predicted_branch = (pc+1)*4;
       fetched_instruction_available = true;
-      ++pc;
+      fetched_instruction_rasp = rasp;
+      int bp = pc+1;
+      {
+        uint32_t pword = fetched_instruction;
+        int opcode = pword>>26;
+        int rs = (pword>>21)&31;
+        int funct = pword&63;
+        int fmt = rs;
+        int jt = (pc>>26<<26)|(pword&((1U<<26)-1));
+        if(opcode == OPCODE_J || opcode == OPCODE_JAL) {
+          bp = jt;
+          if(opcode == OPCODE_JAL) {
+            rasp = (rasp-1)&31;
+            ra_stack[rasp] = (uint32_t)(pc+1)*4;
+          }
+        } else if(
+            (opcode == OPCODE_BEQ || opcode == OPCODE_BNE ||
+             (opcode == OPCODE_COP1 && fmt == COP1_FMT_BRANCH)) &&
+            (int16_t)pword < 0) {
+          bp = pc+1+(int16_t)pword;
+        } else if(
+            opcode == OPCODE_SPECIAL && funct == FUNCT_JR &&
+            rs == 31) {
+          bp = ra_stack[rasp]>>2;
+          rasp = (rasp+1)&31;
+        }
+      }
+      fetched_instruction_predicted_branch = (uint32_t)bp*4;
+      pc = bp;
     }
     lsbuffer.do_issue(last_rob_top, rob_top_committable,
                       last_rob_val);
