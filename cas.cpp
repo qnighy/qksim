@@ -156,11 +156,18 @@ inline value_tag cdb_available_val(uint32_t value, int tag) {
   return ret;
 }
 
+enum class branch_type {
+  NONBRANCH,
+  JUMP,
+  JUMPREGISTER,
+  BRANCH
+};
+
 struct rob_val {
   bool busy;
   bool decode_success;
   bool isstore;
-  bool isbranch;
+  branch_type btype;
   int set_reg;
   value_tag val;
   value_tag branch_target;
@@ -446,6 +453,8 @@ static uint64_t num_instructions;
 
 static uint64_t num_committed_branches;
 static uint64_t num_missed_branches;
+static uint64_t num_committed_jumpregisters;
+static uint64_t num_missed_jumpregisters;
 
 timeval start_tv;
 
@@ -455,6 +464,8 @@ static void cas_run() {
   num_instructions = 0;
   num_committed_branches = 0;
   num_missed_branches = 0;
+  num_committed_jumpregisters = 0;
+  num_missed_jumpregisters = 0;
   gettimeofday(&start_tv, nullptr);
 
   int pc = 0;
@@ -642,7 +653,25 @@ static void cas_run() {
       }
       refetch =
         rob[rob_top].branch_target.value != rob[rob_top].predicted_branch;
-      if(rob[rob_top].isbranch) {
+      if(rob[rob_top].btype == branch_type::JUMP) {
+        if(show_commit_log) {
+          fprintf(stderr, "pc=0x%08x: jump to 0x%08x\n",
+              (uint32_t)rob[rob_top].pc*4,
+              rob[rob_top].branch_target.value);
+        }
+      } else if(rob[rob_top].btype == branch_type::JUMPREGISTER) {
+        num_committed_jumpregisters++;
+        if(refetch) num_missed_jumpregisters++;
+        if(show_commit_log) {
+          fprintf(stderr, "pc=0x%08x: jump register to 0x%08x\n",
+              (uint32_t)rob[rob_top].pc*4,
+              rob[rob_top].branch_target.value);
+          if(refetch) {
+            fprintf(stderr, "pc=0x%08x: jump-target prediction missed\n",
+                (uint32_t)rob[rob_top].pc*4);
+          }
+        }
+      } else if(rob[rob_top].btype == branch_type::BRANCH) {
         num_committed_branches++;
         if(refetch) num_missed_branches++;
         if(show_commit_log) {
@@ -731,7 +760,7 @@ static void cas_run() {
       dispatch_rob.busy = true;
       dispatch_rob.decode_success = true;
       dispatch_rob.isstore = false;
-      dispatch_rob.isbranch = false;
+      dispatch_rob.btype = branch_type::NONBRANCH;
       dispatch_rob.val = from_tag(rob_bottom);
       dispatch_rob.branch_target =
         from_value((uint32_t)(decoded_instruction_pc+1)*4);
@@ -816,7 +845,7 @@ static void cas_run() {
               break;
             case FUNCT_JR:
             case FUNCT_JALR:
-              dispatch_rob.isbranch = true;
+              dispatch_rob.btype = branch_type::JUMPREGISTER;
               dispatch_rob.val =
                 from_value((uint32_t)(decoded_instruction_pc+1)*4);
               dispatch_rob.branch_target = get_reg(rs);
@@ -836,6 +865,7 @@ static void cas_run() {
           break;
         case OPCODE_J:
         case OPCODE_JAL:
+          dispatch_rob.btype = branch_type::JUMP;
           dispatch_rob.val =
             from_value((uint32_t)(decoded_instruction_pc+1)*4);
           dispatch_rob.branch_target = from_value(jt*4);
@@ -845,7 +875,7 @@ static void cas_run() {
           break;
         case OPCODE_BEQ:
         case OPCODE_BNE:
-          dispatch_rob.isbranch = true;
+          dispatch_rob.btype = branch_type::BRANCH;
           do_dispatch = do_dispatch && brancher.dispatchable();
           dispatch_rob.branch_target = from_tag(rob_bottom);
           if(do_dispatch) {
@@ -905,7 +935,7 @@ static void cas_run() {
         case OPCODE_COP1:
           switch(fmt) {
             case COP1_FMT_BRANCH:
-              dispatch_rob.isbranch = true;
+              dispatch_rob.btype = branch_type::BRANCH;
               do_dispatch = do_dispatch && brancher.dispatchable();
               dispatch_rob.branch_target = from_tag(rob_bottom);
               if(do_dispatch) {
@@ -1219,7 +1249,15 @@ static void cas_run() {
     // fprintf(stderr, "rob_top=%d, rob_bottom=%d\n", rob_top, rob_bottom);
     num_cycles++;
     if(num_cycles % 100000000 == 0) {
-      do_show_statistics();
+      if(show_statistics) {
+        fprintf(stderr, "current result:\n");
+        do_show_statistics();
+        fprintf(stderr, "\n");
+      } else {
+        fprintf(stderr,
+            "%13" PRId64 "clks, %11" PRId64 "insts ...\n",
+            num_cycles, num_instructions);
+      }
     }
   }
 }
@@ -1245,17 +1283,29 @@ void cas_main() {
 static void do_show_statistics() {
   timeval current_tv;
   gettimeofday(&current_tv, nullptr);
+  double time_sim = num_cycles/clk;
+  double time_real =
+    (current_tv.tv_sec-start_tv.tv_sec)+
+    (current_tv.tv_usec-start_tv.tv_usec)*0.000001;
   fprintf(stderr,
-      "%13" PRId64 "clks, %11" PRId64 "insts, "
-      "%5.1fsecs (sim), %6.1fsecs (real)\n",
-      num_cycles, num_instructions, num_cycles/clk,
-      (current_tv.tv_sec-start_tv.tv_sec)+
-      (current_tv.tv_usec-start_tv.tv_usec)*0.000001);
+      " all: %13" PRId64 "clks, %11" PRId64 "insts"
+      " (cpi = %5.2f, ipc = %5.2f)\n",
+      num_cycles, num_instructions,
+      (double)num_cycles/num_instructions,
+      (double)num_instructions/num_cycles);
   fprintf(stderr,
-          "branch misprediction: %" PRId64 " / %" PRId64 " (%.f%%)\n",
+      " time: %5.1fsecs (sim), %6.1fsecs (real), ratio = %5.1f\n",
+      time_sim, time_real, time_real/time_sim);
+  fprintf(stderr,
+          " branch   misprediction: %9" PRId64 " / %9" PRId64 " (%5.2f%%)\n",
           num_missed_branches,
           num_committed_branches,
           num_missed_branches*100.0/num_committed_branches);
+  fprintf(stderr,
+          " jump-reg misprediction: %9" PRId64 " / %9" PRId64 " (%5.2f%%)\n",
+          num_missed_jumpregisters,
+          num_committed_jumpregisters,
+          num_missed_jumpregisters*100.0/num_committed_jumpregisters);
 }
 
 static void show_statistics_and_exit(int status) {
