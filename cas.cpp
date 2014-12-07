@@ -157,6 +157,7 @@ struct rob_val {
   value_tag val;
   value_tag branch_target;
   uint32_t predicted_branch;
+  int pc;
 };
 
 static value_tag cdb[CDB_SIZE];
@@ -511,7 +512,8 @@ static void cas_run() {
         lsbuffer.store_committable(rob_top, rob_top_committable)) ) {
       if(rob[rob_top].set_reg) {
         if(show_commit_log) {
-          fprintf(stderr, "$%s <- 0x%08x\n",
+          fprintf(stderr, "pc=0x%08x: $%s <- 0x%08x\n",
+              (uint32_t)rob[rob_top].pc*4,
               regnames[rob[rob_top].set_reg], rob[rob_top].val.value);
         }
         reg[rob[rob_top].set_reg].value = rob[rob_top].val.value;
@@ -589,6 +591,7 @@ static void cas_run() {
       dispatch_rob.branch_target =
         from_value((uint32_t)(decoded_instruction_pc+1)*4);
       dispatch_rob.predicted_branch = decoded_instruction_predicted_branch;
+      dispatch_rob.pc = decoded_instruction_pc;
       dispatch_rob.set_reg = 0;
       bool do_dispatch = !rob[rob_bottom].busy;
       ls_entry1 dispatch_lsbuffer;
