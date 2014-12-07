@@ -38,7 +38,7 @@ inline uint32_t rs_recv_data() {
   return ret;
 }
 inline uint32_t rs_send_status() {
-  return send_queue_top != ((recv_queue_bottom+1)&1023);
+  return send_queue_top != ((send_queue_bottom+1)&1023);
 }
 inline void rs_send_data(uint32_t dat) {
   unsigned char ch = dat;
