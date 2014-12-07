@@ -320,11 +320,6 @@ struct load_store_buffer {
         return true;
       }
     }
-    for(int i = 0; i < num_entries2; ++i) {
-      fprintf(stderr, "%d: %d, %d, %d, %d\n", i,
-          entries2[i].busy, entries2[i].isstore,
-          entries2[i].tag, rob_top);
-    }
     return false;
   }
   bool dispatchable() {
@@ -669,6 +664,7 @@ static void cas_run() {
         if(rob[rob_top].branch_target.value&3) {
           fprintf(stderr, "error: unaligned branch target 0x%08x\n",
               rob[rob_top].branch_target.value);
+          show_statistics_and_exit(1);
         }
         refetch_address = rob[rob_top].branch_target.value>>2;
         refetch_rasp = rob[rob_top].rasp;
