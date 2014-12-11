@@ -506,7 +506,7 @@ static void cas_run() {
 
   rs_init();
 
-  load_store_buffer<2, 2> lsbuffer;
+  load_store_buffer<3, 3> lsbuffer;
   reservation_station<1, 2, 4> brancher;
   reservation_station<1, 2, 2> alu;
   reservation_station<2, 2, 2> fp_adder;
