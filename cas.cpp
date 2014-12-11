@@ -172,6 +172,7 @@ struct rob_val {
   value_tag val;
   value_tag branch_target;
   uint32_t predicted_branch;
+  int gshare_pos;
   int pc;
   int rasp;
 };
@@ -448,6 +449,9 @@ inline value_tag get_reg(int r) {
 static uint32_t ra_stack[32];
 static int rasp;
 
+static uint32_t gshare_bhr;
+static unsigned char gshare_pht[1<<15];
+
 static uint64_t num_cycles;
 static uint64_t num_instructions;
 
@@ -492,12 +496,22 @@ static void cas_run() {
   int decoded_instruction_pc = -1;
   uint32_t fetched_instruction_predicted_branch = 0x55555555U;
   uint32_t decoded_instruction_predicted_branch = 0x55555555U;
+  int fetched_instruction_gshare_pos = 0;
+  int decoded_instruction_gshare_pos = 0;
   bool fetched_instruction_available = false;
   bool decoded_instruction_available = false;
   int fetched_instruction_rasp = -1;
   int decoded_instruction_rasp = -1;
 
+  fill(ra_stack, ra_stack+32, 0);
   rasp = 0;
+  gshare_bhr = 0;
+  fill(gshare_pht, gshare_pht+(1<<15), 0);
+  uint32_t gshare_bhr_delay1 = 0;
+  uint32_t gshare_bhr_delay2 = 0;
+  bool gshare_writeback = false;
+  int gshare_writeback_pos = 0;
+  unsigned char gshare_writeback_val = 0;
 
   reset_cdb();
   for(int i = 0; i < NUM_REGS; ++i) {
@@ -647,6 +661,9 @@ static void cas_run() {
     bool refetch = false;
     int refetch_address = -1;
     int refetch_rasp = -1;
+    gshare_bhr_delay2 = gshare_bhr_delay1;
+    gshare_bhr_delay1 = gshare_bhr;
+    gshare_writeback = false;
     if(rob[rob_top].busy && !rob[rob_top].decode_success) {
       fprintf(stderr, "error: tried to commit undecoded instruction\n");
       show_statistics_and_exit(1);
@@ -706,6 +723,26 @@ static void cas_run() {
                 (uint32_t)rob[rob_top].pc*4);
           }
         }
+      }
+      if(rob[rob_top].btype == branch_type::BRANCH) {
+        bool branch_taken =
+          rob[rob_top].branch_target.value != (uint32_t)(rob[rob_top].pc+1)*4;
+        gshare_bhr = (gshare_bhr << 1) | branch_taken;
+        unsigned char phtval = gshare_pht[rob[rob_top].gshare_pos];
+        // phtval = 3;
+        if(branch_taken) {
+          phtval = min(phtval+1, 3);
+        } else {
+          phtval = max(phtval-1, 0);
+        }
+        // if(branch_taken) {
+        //   phtval = (phtval>0)*2+1;
+        // } else {
+        //   phtval = (phtval==3)*2;
+        // }
+        gshare_writeback_val = phtval;
+        gshare_writeback_pos = rob[rob_top].gshare_pos;
+        gshare_writeback = true;
       }
       if(refetch) {
         if(rob[rob_top].branch_target.value&3) {
@@ -784,6 +821,7 @@ static void cas_run() {
       dispatch_rob.branch_target =
         from_value((uint32_t)(decoded_instruction_pc+1)*4);
       dispatch_rob.predicted_branch = decoded_instruction_predicted_branch;
+      dispatch_rob.gshare_pos = decoded_instruction_gshare_pos;
       dispatch_rob.pc = decoded_instruction_pc;
       dispatch_rob.rasp = decoded_instruction_rasp;
       dispatch_rob.set_reg = 0;
@@ -1218,6 +1256,8 @@ static void cas_run() {
       decoded_instruction_pc = fetched_instruction_pc;
       decoded_instruction_predicted_branch =
         fetched_instruction_predicted_branch;
+      decoded_instruction_gshare_pos =
+        fetched_instruction_gshare_pos;
       decoded_instruction_available = true;
       decoded_instruction_rasp = fetched_instruction_rasp;
     } else if(fetched_instruction_available) {
@@ -1239,6 +1279,7 @@ static void cas_run() {
       fetched_instruction_available = true;
       fetched_instruction_rasp = rasp;
       int bp = pc+1;
+      int gshare_pos = -1;
       {
         uint32_t pword = fetched_instruction;
         int opcode = pword>>26;
@@ -1246,6 +1287,8 @@ static void cas_run() {
         int funct = pword&63;
         int fmt = rs;
         int jt = (pc>>26<<26)|(pword&((1U<<26)-1));
+        gshare_pos = (pc^(gshare_bhr_delay2<<5))&((1<<15)-1);
+        int phtval = gshare_pht[gshare_pos];
         if(opcode == OPCODE_J || opcode == OPCODE_JAL) {
           bp = jt;
           if(opcode == OPCODE_JAL) {
@@ -1255,7 +1298,7 @@ static void cas_run() {
         } else if(
             (opcode == OPCODE_BEQ || opcode == OPCODE_BNE ||
              (opcode == OPCODE_COP1 && fmt == COP1_FMT_BRANCH)) &&
-            (int16_t)pword < 0) {
+            (phtval&2)) {
           bp = pc+1+(int16_t)pword;
         } else if(
             opcode == OPCODE_SPECIAL && funct == FUNCT_JR &&
@@ -1265,8 +1308,14 @@ static void cas_run() {
         }
       }
       fetched_instruction_predicted_branch = (uint32_t)bp*4;
+      fetched_instruction_gshare_pos = gshare_pos;
       pc = bp;
     }
+
+    if(gshare_writeback) {
+      gshare_pht[gshare_writeback_pos] = gshare_writeback_val;
+    }
+
     lsbuffer.do_issue(last_rob_top, rob_top_committable,
                       last_rob_val);
     brancher.do_issue();
